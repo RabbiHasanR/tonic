@@ -1,0 +1,23 @@
+{
+  "project_name": "Tonic API",
+  "project_slug": "tonic_api",
+  "description": "GraphQL API for the Tonic platform",
+  "tech_stack": {
+    "framework": "FastAPI",
+    "graphql": "strawberry-graphql[fastapi]",
+    "database": "PostgreSQL",
+    "orm": "SQLModel",
+    "migrations": "Alembic",
+    "container": "multistage Docker (uv builder + python:3.13-slim-bookworm runtime)"
+  },
+  "conventions": {
+    "api_style": "GraphQL only — single /graphql endpoint, no REST",
+    "module_layout": "types.py / queries.py / mutations.py / service.py / models.py",
+    "schema_assembly": "strawberry.tools.merge_types in app/graphql/schema.py",
+    "db_access": "info.context.session passed into service methods",
+    "exceptions": "raise strawberry.exceptions.GraphQLError for client-facing errors",
+    "config": "from app.core.config import settings (never os.environ)"
+  },
+  "modules": [],
+  "notes": "Feed this file to @project-extender when planning new features."
+}
