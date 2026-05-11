@@ -18,6 +18,38 @@
     "exceptions": "raise strawberry.exceptions.GraphQLError for client-facing errors",
     "config": "from app.core.config import settings (never os.environ)"
   },
-  "modules": [],
+  "modules": [
+    {
+      "name": "users",
+      "tables": ["users"],
+      "root_queries": ["me", "user"],
+      "root_mutations": ["register", "login"],
+      "auth": "register/login issue JWT; me returns info.context.user (nullable)"
+    },
+    {
+      "name": "posts",
+      "tables": ["posts"],
+      "root_queries": ["posts", "post"],
+      "root_mutations": ["createPost", "updatePost", "deletePost"],
+      "auth": "create requires auth; update/delete are author-only",
+      "nested_fields": ["Post.author", "Post.comments"]
+    },
+    {
+      "name": "comments",
+      "tables": ["comments"],
+      "root_queries": [],
+      "root_mutations": ["createComment", "deleteComment"],
+      "auth": "create requires auth; delete is author-only",
+      "nested_fields": ["Comment.author"],
+      "notes": "post_id FK has ON DELETE CASCADE — deleting a post wipes its comments"
+    }
+  ],
+  "auth": {
+    "scheme": "JWT (HS256)",
+    "header": "Authorization: Bearer <token>",
+    "password_hash": "Argon2id (argon2-cffi)",
+    "context_field": "info.context.user (Optional[User])",
+    "helper": "app.core.auth.require_user(info)"
+  },
   "notes": "Feed this file to @project-extender when planning new features."
 }

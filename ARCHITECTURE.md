@@ -155,7 +155,42 @@ All config flows through `app.core.config.settings` (pydantic-settings `BaseSett
 
 ## Modules
 
-_(none yet — each `add-module` invocation appends an entry here)_
+### `users` — accounts and authentication
+
+- **Tables:** `users` (id uuid PK, email unique, password_hash, display_name, created_at, updated_at).
+- **GraphQL types:** `User`, `AuthPayload`, `RegisterInput`, `LoginInput`.
+- **Root queries:** `me: User`, `user(id: ID!): User!`.
+- **Root mutations:** `register(input): AuthPayload!`, `login(input): AuthPayload!`.
+- **Service:** `UserService` (register / authenticate / get_user).
+- **Nested fields:** `User.posts` resolves via `PostService.list_by_author`.
+
+### `posts` — blog posts
+
+- **Tables:** `posts` (id uuid PK, author_id FK → users, title, body markdown, created_at indexed for newest-first, updated_at).
+- **GraphQL types:** `Post`, `PostCreateInput`, `PostUpdateInput`.
+- **Root queries:** `posts(limit: Int = 20): [Post!]!`, `post(id: ID!): Post!`.
+- **Root mutations:** `createPost(input): Post!`, `updatePost(input): Post!`, `deletePost(id: ID!): Boolean!` (author-only for update/delete).
+- **Service:** `PostService` (list / list_by_author / get / create / update / delete).
+- **Nested fields:** `Post.author` → `User`, `Post.comments` → `[Comment]`.
+
+### `comments` — discussion threads under posts
+
+- **Tables:** `comments` (id uuid PK, post_id FK → posts ON DELETE CASCADE, author_id FK → users, body, created_at indexed, updated_at).
+- **GraphQL types:** `Comment`, `CommentCreateInput`.
+- **Root queries:** none — comments are read via `Post.comments`.
+- **Root mutations:** `createComment(input): Comment!`, `deleteComment(id: ID!): Boolean!` (author-only delete).
+- **Service:** `CommentService` (list_by_post / get / create / delete).
+- **Nested fields:** `Comment.author` → `User`.
+
+---
+
+## Authentication
+
+- Email + password, Argon2id hashing (`app/core/security.py` via `argon2-cffi`).
+- Stateless **HS256 JWTs** (PyJWT). Payload: `sub` = user id, `iat`, `exp`. Lifetime via `ACCESS_TOKEN_EXPIRE_MINUTES`.
+- `app/graphql/context.py` reads `Authorization: Bearer <token>`, validates it, loads the user, and exposes it as `info.context.user` (Optional).
+- Resolvers that require auth call `app.core.auth.require_user(info)`, which raises a `GraphQLError("Authentication required")` if no user is loaded.
+- Author-only checks live in the service layer (`PostService.update_post`, `delete_post`, `CommentService.delete_comment`).
 
 ---
 

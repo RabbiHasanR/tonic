@@ -13,8 +13,9 @@ if config.config_file_name is not None:
 target_metadata = SQLModel.metadata
 
 # Import all models here so Alembic can detect schema changes:
-# from app.modules.users.models import User  # noqa
-# from app.modules.tasks.models import Task  # noqa
+from app.modules.users.models import User  # noqa: F401
+from app.modules.posts.models import Post  # noqa: F401
+from app.modules.comments.models import Comment  # noqa: F401
 
 
 def run_migrations_offline() -> None:

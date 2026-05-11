@@ -115,6 +115,33 @@ Each entry explains *why* a choice was made — and why alternatives were not.
 **Why not pip:** Slower cold builds, no built-in lock-file resolver of the same quality as uv's.
 **Trade-offs accepted:** Pinned uv major version means occasional bumps when uv ships breaking changes.
 
+## 2026-05-11 — Drop host port binding for Postgres in docker-compose
+**Context:** Only the `app` service ever connects to Postgres, and it does so over the docker bridge network (`postgres:5432`). Exposing 5432 on the host caused conflicts with any local Postgres the developer was running and provided no benefit beyond ad-hoc `psql`.
+**Decision:** Removed `ports: ["${DB_PORT}:5432"]` from the `postgres` service.
+**Alternatives considered:** Keep the binding, change to `5433:5432`, expose only on a private interface.
+**Why this:** Defaults to "works on every machine" — no port collisions with host Postgres. The container is still reachable via `docker compose exec postgres psql ...` when needed.
+**Why not others:** A non-standard host port (5433) is one more thing to remember; private interface bindings vary by OS.
+**Trade-offs accepted:** Connecting from a GUI tool on the host now requires `docker compose port postgres 5432` or a temporary `--publish` override.
+
+## 2026-05-11 — JWT auth with Argon2id password hashing
+**Context:** Phase 1 needs email/password authentication and stateless tokens.
+**Decision:** Argon2id (via `argon2-cffi`) for password hashing; HS256 JWTs (via `PyJWT`) for access tokens. JWT carries only `sub` (user id), `iat`, `exp`. Token lifetime configurable via `ACCESS_TOKEN_EXPIRE_MINUTES` (default 60). No refresh tokens in Phase 1 (explicitly out of scope).
+**Alternatives considered:** bcrypt + PyJWT; passlib (deprecating); python-jose; opaque server-side session tokens.
+**Why this:** Argon2id is the OWASP-recommended password hash (memory-hard, resistant to GPU attacks); `argon2-cffi` is the canonical Python binding. PyJWT is the smallest, best-maintained JWT library — no dependency on the abandoned `python-jose`. Stateless JWTs avoid a session store while we're still single-tenant.
+**Why not bcrypt:** Slower to tune for modern hardware; vulnerable to GPU-accelerated cracking compared to Argon2id.
+**Why not python-jose:** Has not had a meaningful release in years; PyJWT is actively maintained and has a tighter API.
+**Why not server-side sessions:** Would require a session store (Redis or DB) before we need it; revocation is not a Phase 1 requirement.
+**Trade-offs accepted:** Token revocation requires either a denylist or short token TTLs — fine for Phase 1 since refresh tokens / logout-everywhere are explicitly out of scope.
+
+## 2026-05-11 — UUID primary keys for all Phase 1 entities
+**Context:** Choosing a primary key strategy for `users`, `posts`, `comments`.
+**Decision:** All PKs are `uuid.UUID` columns (PostgreSQL native `uuid` type), generated client-side via `uuid.uuid4`.
+**Alternatives considered:** Auto-increment `bigint`, ULID, UUIDv7.
+**Why this:** Globally unique (safe to merge/replicate later), opaque to clients (no enumeration of how many posts exist), client-generatable (no round-trip to DB before inserts). Postgres has a native `uuid` type — no varchar abuse.
+**Why not bigint:** Leaks counts; complicates future multi-region or sharded deployments.
+**Why not ULID / UUIDv7:** Better sort order, but no stdlib support yet; not worth a dependency at this stage.
+**Trade-offs accepted:** UUIDs are 16 bytes vs 8 for bigint, and random UUIDs hurt B-tree locality. Acceptable at Phase 1 traffic; revisit if write throughput becomes a constraint.
+
 ## 2026-05-10 — docker-compose runs the production image with dev-friendly overrides
 **Context:** How local development happens.
 **Decision:** A single `docker-compose.yml` builds and runs the production Dockerfile, then overrides the `command:` to `uvicorn ... --reload` and volume-mounts `./app` and `./alembic` for hot reload. Postgres runs as a sibling service with a healthcheck and `depends_on: condition: service_healthy`.
