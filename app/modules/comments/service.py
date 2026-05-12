@@ -44,6 +44,21 @@ class CommentService:
         return comment
 
     @staticmethod
+    def update_comment(
+        session: Session, comment_id: str, actor_id: UUID, body: str
+    ) -> Comment:
+        comment = CommentService.get_comment(session, comment_id)
+        if comment.author_id != actor_id:
+            raise GraphQLError("Not authorized to update this comment")
+        if not body.strip():
+            raise GraphQLError("Comment body is required")
+        comment.body = body.strip()
+        session.add(comment)
+        session.commit()
+        session.refresh(comment)
+        return comment
+
+    @staticmethod
     def delete_comment(session: Session, comment_id: str, actor_id: UUID) -> None:
         comment = CommentService.get_comment(session, comment_id)
         if comment.author_id != actor_id:

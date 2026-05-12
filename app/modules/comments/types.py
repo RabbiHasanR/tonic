@@ -43,3 +43,9 @@ class Comment:
 class CommentCreateInput:
     post_id: strawberry.ID
     body: str
+
+
+@strawberry.input
+class CommentUpdateInput:
+    id: strawberry.ID
+    body: str

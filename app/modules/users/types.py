@@ -1,5 +1,5 @@
 from datetime import datetime
-from typing import TYPE_CHECKING, Annotated
+from typing import TYPE_CHECKING, Annotated, Optional
 
 import strawberry
 from strawberry.types import Info
@@ -54,3 +54,8 @@ class RegisterInput:
 class LoginInput:
     email: str
     password: str
+
+
+@strawberry.input
+class UpdateProfileInput:
+    display_name: Optional[str] = None

@@ -4,7 +4,7 @@ from strawberry.types import Info
 from app.core.auth import require_user
 
 from .service import CommentService
-from .types import Comment, CommentCreateInput
+from .types import Comment, CommentCreateInput, CommentUpdateInput
 
 
 @strawberry.type
@@ -16,6 +16,17 @@ class CommentsMutation:
             info.context.session,
             author_id=user.id,
             post_id=str(input.post_id),
+            body=input.body,
+        )
+        return Comment.from_model(row)
+
+    @strawberry.mutation
+    def update_comment(self, info: Info, input: CommentUpdateInput) -> Comment:
+        user = require_user(info)
+        row = CommentService.update_comment(
+            info.context.session,
+            comment_id=str(input.id),
+            actor_id=user.id,
             body=input.body,
         )
         return Comment.from_model(row)

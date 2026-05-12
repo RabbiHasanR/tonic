@@ -42,6 +42,19 @@ class UserService:
         return user
 
     @staticmethod
+    def update_profile(
+        session: Session, user: User, display_name: str | None
+    ) -> User:
+        if display_name is not None:
+            if not display_name.strip():
+                raise GraphQLError("Display name cannot be empty")
+            user.display_name = display_name.strip()
+        session.add(user)
+        session.commit()
+        session.refresh(user)
+        return user
+
+    @staticmethod
     def get_user(session: Session, user_id: str) -> User:
         try:
             uid = UUID(user_id)
