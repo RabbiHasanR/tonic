@@ -64,3 +64,10 @@ class UserService:
         if user is None:
             raise GraphQLError("User not found")
         return user
+    
+
+    @staticmethod
+    def list_users(session: Session, limit: int = 20) -> list[User]:
+        limit = max(1, min(limit, 100))
+        stmt = select(User).order_by(User.created_at.desc()).limit(limit)
+        return list(session.exec(stmt).all())

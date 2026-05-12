@@ -1,0 +1,208 @@
+# users
+
+# Register (public)
+
+mutation Register {
+  register(input: {
+    email: "alice@example.com"
+    password: "secret123"
+    displayName: "Alice"
+  }) {
+    token
+    user { id email displayName createdAt }
+  }
+}
+
+
+# Login (public)
+
+mutation Login {
+  login(input: { email: "alice@example.com", password: "secret123" }) {
+    token
+    user { id email displayName }
+  }
+}
+
+
+# Me (auth required)
+
+query Me {
+  me {
+    id
+    email
+    displayName
+    createdAt
+    posts { id title }
+  }
+}
+
+# Get user by id (public)
+
+query GetUser {
+  user(id: "PASTE_USER_ID") {
+    id
+    email
+    displayName
+    posts { id title createdAt }
+  }
+}
+
+
+# Get List of Users (public)
+
+query list_of_users {
+  users{
+    id
+    email
+    displayName
+    createdAt
+  }
+}
+
+
+# Update profile (auth required)
+
+
+mutation UpdateProfile {
+  updateProfile(input: { displayName: "Alice Updated" }) {
+    id
+    displayName
+    updatedAt
+  }
+}
+
+
+
+# Posts
+
+# List posts (public)
+
+query Posts {
+  posts(limit: 20) {
+    id
+    title
+    body
+    createdAt
+    author { id displayName }
+    comments { id body }
+  }
+}
+
+
+# Single post (public)
+
+query Post {
+  post(id: "PASTE_POST_ID") {
+    id
+    title
+    body
+    createdAt
+    updatedAt
+    author { id displayName email }
+    comments {
+      id
+      body
+      createdAt
+      author { id displayName }
+    }
+  }
+}
+
+
+
+
+# alice update access token
+{
+  "Authorization": "Bearer eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJzdWIiOiJmMmFhMWIyNy05YmVhLTRhNzctOTg3Yi0xNjE2ZGFhNWE2ZTEiLCJpYXQiOjE3Nzg1NjY2ODksImV4cCI6MTc3ODU3MDI4OX0.JpNMuFdF6bU65y-vLIb3UBvicoZynCrKDUKSK85oTP8"
+}
+
+# alice 2 access token
+eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJzdWIiOiJmMmFhMWIyNy05YmVhLTRhNzctOTg3Yi0xNjE2ZGFhNWE2ZTEiLCJpYXQiOjE3Nzg1Njg2MzIsImV4cCI6MTc3ODU3MjIzMn0.O4aRxUOmhROICwOlqKc8cboA9_-JhvPiRavO50Hmv3g
+
+# rabbi access token
+eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJzdWIiOiI4MWYwYTI2ZC0zMjJkLTRlZDUtYjFhYi1mMjg4OWQ3NzM2YTciLCJpYXQiOjE3Nzg1Njg2ODQsImV4cCI6MTc3ODU3MjI4NH0.9CpFqnPDVTo2UvBWowlbb85hFrqUDfqbSb6iZvRK9yc
+
+# Create post (auth required)
+
+mutation CreatePost {
+  createPost(input: {
+    title: "My first post"
+    body: "Hello world from GraphQL!"
+  }) {
+    id
+    title
+    body
+    createdAt
+    author { id displayName }
+  }
+}
+
+
+# Update post (auth required, owner only)
+
+mutation UpdatePost {
+  updatePost(input: {
+    id: "PASTE_POST_ID"
+    title: "Updated title"
+    body: "Updated body"
+  }) {
+    id
+    title
+    body
+    updatedAt
+  }
+}
+
+
+# Delete post (auth required, owner only)
+
+mutation DeletePost {
+  deletePost(id: "PASTE_POST_ID")
+}
+
+
+# Comments
+
+# Comments are read via Post.comments (no root query). Mutations require auth.
+
+# Create comment (auth required)
+
+mutation CreateComment {
+  createComment(input: {
+    postId: "PASTE_POST_ID"
+    body: "Nice post!"
+  }) {
+    id
+    body
+    createdAt
+    author { id displayName }
+  }
+}
+
+
+# Update comment (auth required, owner only)
+
+mutation UpdateComment {
+  updateComment(input: {
+    id: "PASTE_COMMENT_ID"
+    body: "Edited comment body"
+  }) {
+    id
+    body
+    updatedAt
+  }
+}
+
+
+# Delete comment (auth required, owner only)
+
+mutation DeleteComment {
+  deleteComment(id: "PASTE_COMMENT_ID")
+}
+
+
+# Health check
+
+query Ping {
+  ping
+}

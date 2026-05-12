@@ -18,3 +18,9 @@ class UsersQuery:
     def user(self, info: Info, id: strawberry.ID) -> User:
         row = UserService.get_user(info.context.session, str(id))
         return User.from_model(row)
+    
+    @strawberry.field
+    def users(self, info: Info, limit: int = 20) -> list[User]:
+        rows = UserService.list_users(info.context.session, limit=limit)
+        return [User.from_model(r) for r in rows]
+        
