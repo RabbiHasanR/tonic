@@ -4,6 +4,8 @@ from typing import TYPE_CHECKING, Annotated
 import strawberry
 from strawberry.types import Info
 
+from app.graphql.pagination import PageInfo
+
 if TYPE_CHECKING:
     from app.modules.users.types import User
 
@@ -49,3 +51,16 @@ class CommentCreateInput:
 class CommentUpdateInput:
     id: strawberry.ID
     body: str
+
+
+@strawberry.type
+class CommentEdge:
+    cursor: str
+    node: Comment
+
+
+@strawberry.type
+class CommentConnection:
+    edges: list[CommentEdge]
+    page_info: PageInfo
+    total_count: int

@@ -1,8 +1,10 @@
 from uuid import UUID
 
+from sqlalchemy import func
 from sqlmodel import Session, select
 from strawberry.exceptions import GraphQLError
 
+from app.graphql.pagination import encode_cursor, paginate
 from app.modules.posts.service import PostService
 
 from .models import Comment
@@ -10,13 +12,36 @@ from .models import Comment
 
 class CommentService:
     @staticmethod
-    def list_by_post(session: Session, post_id: str) -> list[Comment]:
+    def list_by_post_connection(
+        session: Session,
+        post_id: str,
+        first: int | None = None,
+        after: str | None = None,
+        last: int | None = None,
+        before: str | None = None,
+    ) -> tuple[list[Comment], bool, bool, int]:
         try:
             pid = UUID(post_id)
         except ValueError:
-            return []
-        stmt = select(Comment).where(Comment.post_id == pid).order_by(Comment.created_at.asc())
-        return list(session.exec(stmt).all())
+            return [], False, False, 0
+        return paginate(
+            session,
+            base_stmt=select(Comment).where(Comment.post_id == pid),
+            count_stmt=select(func.count())
+            .select_from(Comment)
+            .where(Comment.post_id == pid),
+            sort_col=Comment.created_at,
+            id_col=Comment.id,
+            first=first,
+            after=after,
+            last=last,
+            before=before,
+            direction="asc",
+        )
+
+    @staticmethod
+    def encode_cursor(comment: Comment) -> str:
+        return encode_cursor(comment.created_at, comment.id)
 
     @staticmethod
     def get_comment(session: Session, comment_id: str) -> Comment:

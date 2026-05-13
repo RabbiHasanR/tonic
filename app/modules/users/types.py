@@ -35,8 +35,9 @@ class User:
         last: Optional[int] = None,
         before: Optional[str] = None,
     ) -> Annotated["PostConnection", strawberry.lazy("app.modules.posts.types")]:
+        from app.graphql.pagination import PageInfo
         from app.modules.posts.service import PostService
-        from app.modules.posts.types import PageInfo, Post, PostConnection, PostEdge
+        from app.modules.posts.types import Post, PostConnection, PostEdge
 
         nodes, has_next_page, has_previous_page, total_count = (
             PostService.list_by_author_connection(

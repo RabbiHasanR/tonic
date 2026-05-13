@@ -128,7 +128,11 @@ query PostsFirstPage {
         body
         createdAt
         author { id displayName }
-        comments { id body }
+        comments(first: 5) {
+          totalCount
+          pageInfo { hasNextPage endCursor }
+          edges { cursor node { id body } }
+        }
       }
     }
   }
@@ -202,11 +206,42 @@ query Post {
     createdAt
     updatedAt
     author { id displayName email }
-    comments {
-      id
-      body
-      createdAt
-      author { id displayName }
+    comments(first: 10) {
+      totalCount
+      pageInfo { hasNextPage hasPreviousPage startCursor endCursor }
+      edges {
+        cursor
+        node {
+          id
+          body
+          createdAt
+          author { id displayName }
+        }
+      }
+    }
+  }
+}
+
+# Next page of a post's comments (forward, after endCursor)
+
+query CommentsNextPage {
+  post(id: "PASTE_POST_ID") {
+    id
+    comments(first: 10, after: "PASTE_END_CURSOR") {
+      pageInfo { hasNextPage endCursor }
+      edges { cursor node { id body createdAt } }
+    }
+  }
+}
+
+# Previous page of a post's comments (backward, before startCursor)
+
+query CommentsPrevPage {
+  post(id: "PASTE_POST_ID") {
+    id
+    comments(last: 10, before: "PASTE_START_CURSOR") {
+      pageInfo { hasNextPage hasPreviousPage startCursor endCursor }
+      edges { cursor node { id body createdAt } }
     }
   }
 }

@@ -4,8 +4,10 @@ from typing import TYPE_CHECKING, Annotated, Optional
 import strawberry
 from strawberry.types import Info
 
+from app.graphql.pagination import PageInfo
+
 if TYPE_CHECKING:
-    from app.modules.comments.types import Comment
+    from app.modules.comments.types import CommentConnection
     from app.modules.users.types import User
 
 
@@ -41,13 +43,49 @@ class Post:
 
     @strawberry.field
     def comments(
-        self, info: Info
-    ) -> list[Annotated["Comment", strawberry.lazy("app.modules.comments.types")]]:
+        self,
+        info: Info,
+        first: int | None = None,
+        after: str | None = None,
+        last: int | None = None,
+        before: str | None = None,
+    ) -> Annotated[
+        "CommentConnection", strawberry.lazy("app.modules.comments.types")
+    ]:
         from app.modules.comments.service import CommentService
-        from app.modules.comments.types import Comment
+        from app.modules.comments.types import (
+            Comment,
+            CommentConnection,
+            CommentEdge,
+        )
 
-        rows = CommentService.list_by_post(info.context.session, str(self.id))
-        return [Comment.from_model(r) for r in rows]
+        nodes, has_next_page, has_previous_page, total_count = (
+            CommentService.list_by_post_connection(
+                info.context.session,
+                str(self.id),
+                first=first,
+                after=after,
+                last=last,
+                before=before,
+            )
+        )
+        edges = [
+            CommentEdge(
+                cursor=CommentService.encode_cursor(row),
+                node=Comment.from_model(row),
+            )
+            for row in nodes
+        ]
+        return CommentConnection(
+            edges=edges,
+            page_info=PageInfo(
+                has_next_page=has_next_page,
+                has_previous_page=has_previous_page,
+                start_cursor=edges[0].cursor if edges else None,
+                end_cursor=edges[-1].cursor if edges else None,
+            ),
+            total_count=total_count,
+        )
 
 
 @strawberry.input
@@ -61,14 +99,6 @@ class PostUpdateInput:
     id: strawberry.ID
     title: Optional[str] = None
     body: Optional[str] = None
-
-
-@strawberry.type
-class PageInfo:
-    has_next_page: bool
-    has_previous_page: bool
-    start_cursor: Optional[str] = None
-    end_cursor: Optional[str] = None
 
 
 @strawberry.type

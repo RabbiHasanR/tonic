@@ -1,8 +1,10 @@
 import strawberry
 from strawberry.types import Info
 
+from app.graphql.pagination import PageInfo
+
 from .service import PostService
-from .types import PageInfo, Post, PostConnection, PostEdge
+from .types import Post, PostConnection, PostEdge
 
 
 @strawberry.type
