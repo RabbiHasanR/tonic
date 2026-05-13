@@ -81,16 +81,15 @@ query UsersWithPostPreview {
 }
 
 
-# Get List of Users (public)
 
-query list_of_users {
-  users{
-    id
-    email
-    displayName
-    createdAt
+# using page based pagination Get List of Users
+query list_of_users{ 
+  users(page: 1, pageSize: 10) { 
+    items { id email } 
+    pageInfo { page totalPages totalItems hasNext } 
+    } 
   }
-}
+
 
 
 # Update profile (auth required)

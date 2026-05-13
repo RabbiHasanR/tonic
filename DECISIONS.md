@@ -170,3 +170,13 @@ Each entry explains *why* a choice was made — and why alternatives were not.
 **Why this:** Reverses an explicit "forward-only for now" choice in the previous entry — the user asked for it, and the per-row cursors we already emit make backward pagination essentially free server-side. Symmetric API matches what Apollo/Relay/urql clients expect.
 **Why not client-side emulation:** Pushes spec complexity onto every consumer and prevents the server from giving a correct `hasPreviousPage` count.
 **Trade-offs accepted:** Resolver/service surface doubles (two branches, four args, four validation checks). The `hasNextPage`/`hasPreviousPage` in the *non-paginated* direction is a hint, not a count — consistent with the Relay spec but worth documenting if a client relies on it.
+
+## 2026-05-13 — Page (offset) pagination for top-level `users` list
+
+**Context:** The `users` resolver previously took only `limit` (half-pagination — no way to reach page 2). We need full pagination for an admin-style user list. Posts and comments already use Relay cursor pagination.
+**Decision:** Use page-based (`page`/`page_size`) pagination for top-level admin-ish lists, returning a `UserPage { items, page_info: PageMeta }` shape. `PageMeta` carries `page`, `page_size`, `total_items`, `total_pages`, `has_next`, `has_prev`. Helper `offset_paginate(...)` lives in `app/graphql/pagination.py` next to the Relay helper. Gated by `require_user(info)`. Default page_size 20, capped 1–100. Sort `created_at DESC`.
+**Alternatives considered:** Relay cursor (consistent with posts/comments); keep `limit`+add `offset`.
+**Why this:** Admin/listing UIs benefit from "page 3 of 47" + total count, which Relay deliberately doesn't model. The `users` table is small and bounded (one row per human), so `OFFSET` cost and insert-shift concerns are negligible — concerns that drove the Relay choice for `posts`/`comments` don't apply here.
+**Why not Relay everywhere:** Forces clients to fabricate page numbers from cursors and hides `total_pages`, which is exactly what an admin list wants to show.
+**Why not just `limit`+`offset`:** Misses `total_items`/`total_pages` — the whole reason for switching.
+**Trade-offs accepted:** Two pagination styles in the codebase (page for top-level admin lists, Relay for nested feed-like connections). Convention: nested feed-like connections → Relay; top-level admin/listing → page. Each call pays one `COUNT(*)`.

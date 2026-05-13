@@ -3,8 +3,10 @@ from typing import Optional
 import strawberry
 from strawberry.types import Info
 
+from app.core.auth import require_user
+
 from .service import UserService
-from .types import User
+from .types import User, UserPage
 
 
 @strawberry.type
@@ -18,9 +20,12 @@ class UsersQuery:
     def user(self, info: Info, id: strawberry.ID) -> User:
         row = UserService.get_user(info.context.session, str(id))
         return User.from_model(row)
-    
+
     @strawberry.field
-    def users(self, info: Info, limit: int = 20) -> list[User]:
-        rows = UserService.list_users(info.context.session, limit=limit)
-        return [User.from_model(r) for r in rows]
+    def users(self, info: Info, page: int = 1, page_size: int = 20) -> UserPage:
+        require_user(info)
+        rows, meta = UserService.list_users_page(
+            info.context.session, page=page, page_size=page_size
+        )
+        return UserPage(items=[User.from_model(r) for r in rows], page_info=meta)
         

@@ -66,6 +66,15 @@ class User:
 
 
 @strawberry.type
+class UserPage:
+    items: list[User]
+    page_info: "PageMeta"
+
+
+from app.graphql.pagination import PageMeta  # noqa: E402
+
+
+@strawberry.type
 class AuthPayload:
     token: str
     user: User

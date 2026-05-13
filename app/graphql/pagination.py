@@ -20,6 +20,44 @@ class PageInfo:
     end_cursor: Optional[str] = None
 
 
+@strawberry.type
+class PageMeta:
+    page: int
+    page_size: int
+    total_items: int
+    total_pages: int
+    has_next: bool
+    has_prev: bool
+
+
+def offset_paginate(
+    session: Session,
+    base_stmt,
+    count_stmt,
+    page: int,
+    page_size: int,
+    default_page_size: int = 20,
+    max_page_size: int = 100,
+) -> tuple[list, PageMeta]:
+    """Offset/page-based pagination. `base_stmt` must already be ordered."""
+    page = max(1, page)
+    page_size = max(1, min(page_size or default_page_size, max_page_size))
+    total_items = int(session.exec(count_stmt).one())
+    total_pages = (total_items + page_size - 1) // page_size if total_items else 0
+    rows = list(
+        session.exec(base_stmt.offset((page - 1) * page_size).limit(page_size)).all()
+    )
+    meta = PageMeta(
+        page=page,
+        page_size=page_size,
+        total_items=total_items,
+        total_pages=total_pages,
+        has_next=page < total_pages,
+        has_prev=page > 1,
+    )
+    return rows, meta
+
+
 def encode_cursor(created_at: datetime, row_id: UUID) -> str:
     payload = json.dumps({"c": created_at.isoformat(), "id": str(row_id)})
     return base64.urlsafe_b64encode(payload.encode("utf-8")).decode("ascii")
