@@ -150,3 +150,23 @@ Each entry explains *why* a choice was made — and why alternatives were not.
 **Why not separate Dockerfile.dev:** Two images to maintain; harder to ensure dev parity with prod.
 **Why not split compose files:** Extra cognitive load for a small project; the override pattern shines once compose grows beyond 3-4 services.
 **Trade-offs accepted:** The dev compose runs `uvicorn --reload`, which is single-process — good enough for local development; production uses gunicorn workers via the Dockerfile CMD.
+
+## 2026-05-13 — Relay cursor pagination for list resolvers (starting with `posts`)
+
+**Context:** The `posts` resolver previously returned `[Post!]!` with a `limit` argument. We needed pagination that stays correct under concurrent inserts and scales to large datasets.
+**Decision:** Adopt the Relay Connections spec — `posts(first, after)` returns `PostConnection { edges { cursor, node }, pageInfo, totalCount }`. Cursor is opaque base64 of `{created_at, id}` and the query uses tuple comparison `(created_at, id) < (cursor.created_at, cursor.id)` with sort `created_at DESC, id DESC`. Forward-only for now (`first`/`after`); no `last`/`before`. Hand-rolled per-module connection types in `posts/types.py` rather than a shared generic.
+**Alternatives considered:** Offset pagination (`limit`/`offset`), page-based (`page`/`perPage`), forward+backward bi-directional Relay, shared generic `Connection[T]` via Strawberry generics.
+**Why this:** Stable under inserts (no skipped/duplicated rows), constant-time at any depth via the `created_at` index, and matches what Apollo/Relay/urql clients already expect. The tuple cursor handles non-unique `created_at` via the `id` tie-breaker without needing a unique sort column.
+**Why not offset/page:** `OFFSET N` reads and discards N rows on every request — catastrophic at depth — and a concurrent insert shifts every subsequent page by one row, causing duplicate/skipped items.
+**Why not bi-directional:** Doubles the resolver surface (`last`/`before`, reverse query) for a use case we don't have yet (no chat-style scroll-back UI). Easy to add later.
+**Why not shared generic Connection type:** Only one module needs it today. Premature abstraction; extract once a second module (comments/users) needs the same shape.
+**Trade-offs accepted:** `totalCount` adds an extra `COUNT(*)` per request — acceptable at current scale, can be dropped or cached later. No composite `(created_at DESC, id DESC)` index yet; the existing single-column `created_at` index plus PK is adequate until row count grows substantially.
+
+## 2026-05-13 — Extend `posts` connection to bi-directional pagination
+
+**Context:** The `posts` connection was forward-only (`first`/`after`). `PageInfo.hasPreviousPage` was already in the schema (Relay shape), but clients had no way to walk backward, so the field was only ever a hint that `after` had been used.
+**Decision:** Add `last`/`before` to the `posts` resolver. Backward queries flip the sort to ASC (`created_at ASC, id ASC`), use `(created_at, id) > cursor` to walk older→newer from `before`, fetch `last + 1` to derive `hasPreviousPage`, then reverse the slice so the response is still in `created_at DESC` order. Validate that `first`/`last` are mutually exclusive, and that `after` only combines with `first` and `before` only with `last`. Following Relay's convention: when paginating backward, `hasNextPage = before is not None`; when paginating forward, `hasPreviousPage = after is not None` — the spec only requires these be exact in the direction you're paginating.
+**Alternatives considered:** Keep forward-only and treat `hasPreviousPage` as decorative; emulate backward by inverting the cursor on the client.
+**Why this:** Reverses an explicit "forward-only for now" choice in the previous entry — the user asked for it, and the per-row cursors we already emit make backward pagination essentially free server-side. Symmetric API matches what Apollo/Relay/urql clients expect.
+**Why not client-side emulation:** Pushes spec complexity onto every consumer and prevents the server from giving a correct `hasPreviousPage` count.
+**Trade-offs accepted:** Resolver/service surface doubles (two branches, four args, four validation checks). The `hasNextPage`/`hasPreviousPage` in the *non-paginated* direction is a hint, not a count — consistent with the Relay spec but worth documenting if a client relies on it.

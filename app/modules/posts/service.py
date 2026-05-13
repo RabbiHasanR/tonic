@@ -1,17 +1,80 @@
+import base64
+import json
+from datetime import datetime
 from uuid import UUID
 
+from sqlalchemy import func, tuple_
 from sqlmodel import Session, select
 from strawberry.exceptions import GraphQLError
 
 from .models import Post
 
 
+def _encode_cursor(created_at: datetime, post_id: UUID) -> str:
+    payload = json.dumps({"c": created_at.isoformat(), "id": str(post_id)})
+    return base64.urlsafe_b64encode(payload.encode("utf-8")).decode("ascii")
+
+
+def _decode_cursor(cursor: str) -> tuple[datetime, UUID]:
+    try:
+        payload = json.loads(base64.urlsafe_b64decode(cursor.encode("ascii")))
+        return datetime.fromisoformat(payload["c"]), UUID(payload["id"])
+    except (ValueError, KeyError, TypeError) as exc:
+        raise GraphQLError("Invalid cursor") from exc
+
+
 class PostService:
     @staticmethod
-    def list_posts(session: Session, limit: int = 20) -> list[Post]:
-        limit = max(1, min(limit, 100))
-        stmt = select(Post).order_by(Post.created_at.desc()).limit(limit)
-        return list(session.exec(stmt).all())
+    def list_posts_connection(
+        session: Session,
+        first: int | None = None,
+        after: str | None = None,
+        last: int | None = None,
+        before: str | None = None,
+    ) -> tuple[list[Post], bool, bool, int]:
+        if first is not None and last is not None:
+            raise GraphQLError("Pass either `first` or `last`, not both")
+        if after is not None and before is not None:
+            raise GraphQLError("Pass either `after` or `before`, not both")
+        if last is not None and after is not None:
+            raise GraphQLError("`after` can only be combined with `first`")
+        if first is not None and before is not None:
+            raise GraphQLError("`before` can only be combined with `last`")
+
+        backward = last is not None or before is not None
+
+        if backward:
+            limit = max(1, min(last if last is not None else 20, 100))
+            stmt = select(Post).order_by(Post.created_at.asc(), Post.id.asc())
+            if before is not None:
+                cursor_created_at, cursor_id = _decode_cursor(before)
+                stmt = stmt.where(
+                    tuple_(Post.created_at, Post.id) > (cursor_created_at, cursor_id)
+                )
+            rows = list(session.exec(stmt.limit(limit + 1)).all())
+            has_previous_page = len(rows) > limit
+            nodes = rows[:limit] if has_previous_page else rows
+            nodes.reverse()
+            has_next_page = before is not None
+        else:
+            limit = max(1, min(first if first is not None else 20, 100))
+            stmt = select(Post).order_by(Post.created_at.desc(), Post.id.desc())
+            if after is not None:
+                cursor_created_at, cursor_id = _decode_cursor(after)
+                stmt = stmt.where(
+                    tuple_(Post.created_at, Post.id) < (cursor_created_at, cursor_id)
+                )
+            rows = list(session.exec(stmt.limit(limit + 1)).all())
+            has_next_page = len(rows) > limit
+            nodes = rows[:limit] if has_next_page else rows
+            has_previous_page = after is not None
+
+        total_count = session.exec(select(func.count()).select_from(Post)).one()
+        return nodes, has_next_page, has_previous_page, int(total_count)
+
+    @staticmethod
+    def encode_cursor(post: Post) -> str:
+        return _encode_cursor(post.created_at, post.id)
 
     @staticmethod
     def list_by_author(session: Session, author_id: str) -> list[Post]:

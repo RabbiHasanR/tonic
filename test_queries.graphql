@@ -75,16 +75,86 @@ mutation UpdateProfile {
 
 # Posts
 
-# List posts (public)
+# List posts — Relay connection (public)
 
-query Posts {
-  posts(limit: 20) {
-    id
-    title
-    body
-    createdAt
-    author { id displayName }
-    comments { id body }
+# First page (forward, no cursor)
+query PostsFirstPage {
+  posts(first: 5) {
+    totalCount
+    pageInfo {
+      hasNextPage
+      hasPreviousPage
+      startCursor
+      endCursor
+    }
+    edges {
+      cursor
+      node {
+        id
+        title
+        body
+        createdAt
+        author { id displayName }
+        comments { id body }
+      }
+    }
+  }
+}
+
+# Next page (forward, after the previous endCursor)
+query PostsNextPage {
+  posts(first: 5, after: "PASTE_END_CURSOR") {
+    totalCount
+    pageInfo { hasNextPage hasPreviousPage startCursor endCursor }
+    edges {
+      cursor
+      node { id title createdAt author { id displayName } }
+    }
+  }
+}
+
+# Previous page (backward, before the current startCursor)
+query PostsPrevPage {
+  posts(last: 5, before: "PASTE_START_CURSOR") {
+    totalCount
+    pageInfo { hasNextPage hasPreviousPage startCursor endCursor }
+    edges {
+      cursor
+      node { id title createdAt author { id displayName } }
+    }
+  }
+}
+
+# Last page (backward, no cursor — newest cursor walk from the tail)
+query PostsLastPage {
+  posts(last: 5) {
+    totalCount
+    pageInfo { hasNextPage hasPreviousPage startCursor endCursor }
+    edges { cursor node { id title createdAt } }
+  }
+}
+
+# Validation: should return a GraphQL error
+# ("Pass either `first` or `last`, not both")
+query PostsInvalidBoth {
+  posts(first: 5, last: 5) {
+    totalCount
+    edges { cursor node { id } }
+  }
+}
+
+# Validation: should return a GraphQL error
+# ("`after` can only be combined with `first`")
+query PostsInvalidMix {
+  posts(last: 5, after: "PASTE_ANY_CURSOR") {
+    edges { cursor node { id } }
+  }
+}
+
+# Validation: should return a GraphQL error ("Invalid cursor")
+query PostsInvalidCursor {
+  posts(first: 5, after: "not-a-real-cursor") {
+    edges { cursor node { id } }
   }
 }
 

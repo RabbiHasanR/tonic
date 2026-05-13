@@ -61,3 +61,24 @@ class PostUpdateInput:
     id: strawberry.ID
     title: Optional[str] = None
     body: Optional[str] = None
+
+
+@strawberry.type
+class PageInfo:
+    has_next_page: bool
+    has_previous_page: bool
+    start_cursor: Optional[str] = None
+    end_cursor: Optional[str] = None
+
+
+@strawberry.type
+class PostEdge:
+    cursor: str
+    node: Post
+
+
+@strawberry.type
+class PostConnection:
+    edges: list[PostEdge]
+    page_info: PageInfo
+    total_count: int
