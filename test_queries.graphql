@@ -32,7 +32,11 @@ query Me {
     email
     displayName
     createdAt
-    posts { id title }
+    posts(first: 5) {
+      totalCount
+      pageInfo { hasNextPage endCursor }
+      edges { cursor node { id title } }
+    }
   }
 }
 
@@ -43,7 +47,36 @@ query GetUser {
     id
     email
     displayName
-    posts { id title createdAt }
+    posts(first: 10) {
+      totalCount
+      pageInfo { hasNextPage hasPreviousPage startCursor endCursor }
+      edges { cursor node { id title createdAt } }
+    }
+  }
+}
+
+# Next page of a user's posts (forward, after endCursor from GetUser)
+
+query GetUserPostsNextPage {
+  user(id: "PASTE_USER_ID") {
+    id
+    posts(first: 10, after: "PASTE_END_CURSOR") {
+      pageInfo { hasNextPage endCursor }
+      edges { cursor node { id title createdAt } }
+    }
+  }
+}
+
+# Users list — first 3 posts per user (top-N preview pattern)
+
+query UsersWithPostPreview {
+  users {
+    id
+    displayName
+    posts(first: 3) {
+      totalCount
+      edges { cursor node { id title } }
+    }
   }
 }
 

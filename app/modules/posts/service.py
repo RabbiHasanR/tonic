@@ -23,6 +23,52 @@ def _decode_cursor(cursor: str) -> tuple[datetime, UUID]:
         raise GraphQLError("Invalid cursor") from exc
 
 
+def _paginate_posts(
+    session: Session,
+    base_stmt,
+    count_stmt,
+    first: int | None,
+    after: str | None,
+    last: int | None,
+    before: str | None,
+) -> tuple[list[Post], bool, bool, int]:
+    if first is not None and last is not None:
+        raise GraphQLError("Pass either `first` or `last`, not both")
+    if after is not None and before is not None:
+        raise GraphQLError("Pass either `after` or `before`, not both")
+    if last is not None and after is not None:
+        raise GraphQLError("`after` can only be combined with `first`")
+    if first is not None and before is not None:
+        raise GraphQLError("`before` can only be combined with `last`")
+
+    backward = last is not None or before is not None
+
+    if backward:
+        limit = max(1, min(last if last is not None else 20, 100))
+        stmt = base_stmt.order_by(Post.created_at.asc(), Post.id.asc())
+        if before is not None:
+            c_at, c_id = _decode_cursor(before)
+            stmt = stmt.where(tuple_(Post.created_at, Post.id) > (c_at, c_id))
+        rows = list(session.exec(stmt.limit(limit + 1)).all())
+        has_previous_page = len(rows) > limit
+        nodes = rows[:limit] if has_previous_page else rows
+        nodes.reverse()
+        has_next_page = before is not None
+    else:
+        limit = max(1, min(first if first is not None else 20, 100))
+        stmt = base_stmt.order_by(Post.created_at.desc(), Post.id.desc())
+        if after is not None:
+            c_at, c_id = _decode_cursor(after)
+            stmt = stmt.where(tuple_(Post.created_at, Post.id) < (c_at, c_id))
+        rows = list(session.exec(stmt.limit(limit + 1)).all())
+        has_next_page = len(rows) > limit
+        nodes = rows[:limit] if has_next_page else rows
+        has_previous_page = after is not None
+
+    total_count = int(session.exec(count_stmt).one())
+    return nodes, has_next_page, has_previous_page, total_count
+
+
 class PostService:
     @staticmethod
     def list_posts_connection(
@@ -32,58 +78,44 @@ class PostService:
         last: int | None = None,
         before: str | None = None,
     ) -> tuple[list[Post], bool, bool, int]:
-        if first is not None and last is not None:
-            raise GraphQLError("Pass either `first` or `last`, not both")
-        if after is not None and before is not None:
-            raise GraphQLError("Pass either `after` or `before`, not both")
-        if last is not None and after is not None:
-            raise GraphQLError("`after` can only be combined with `first`")
-        if first is not None and before is not None:
-            raise GraphQLError("`before` can only be combined with `last`")
+        return _paginate_posts(
+            session,
+            base_stmt=select(Post),
+            count_stmt=select(func.count()).select_from(Post),
+            first=first,
+            after=after,
+            last=last,
+            before=before,
+        )
 
-        backward = last is not None or before is not None
-
-        if backward:
-            limit = max(1, min(last if last is not None else 20, 100))
-            stmt = select(Post).order_by(Post.created_at.asc(), Post.id.asc())
-            if before is not None:
-                cursor_created_at, cursor_id = _decode_cursor(before)
-                stmt = stmt.where(
-                    tuple_(Post.created_at, Post.id) > (cursor_created_at, cursor_id)
-                )
-            rows = list(session.exec(stmt.limit(limit + 1)).all())
-            has_previous_page = len(rows) > limit
-            nodes = rows[:limit] if has_previous_page else rows
-            nodes.reverse()
-            has_next_page = before is not None
-        else:
-            limit = max(1, min(first if first is not None else 20, 100))
-            stmt = select(Post).order_by(Post.created_at.desc(), Post.id.desc())
-            if after is not None:
-                cursor_created_at, cursor_id = _decode_cursor(after)
-                stmt = stmt.where(
-                    tuple_(Post.created_at, Post.id) < (cursor_created_at, cursor_id)
-                )
-            rows = list(session.exec(stmt.limit(limit + 1)).all())
-            has_next_page = len(rows) > limit
-            nodes = rows[:limit] if has_next_page else rows
-            has_previous_page = after is not None
-
-        total_count = session.exec(select(func.count()).select_from(Post)).one()
-        return nodes, has_next_page, has_previous_page, int(total_count)
+    @staticmethod
+    def list_by_author_connection(
+        session: Session,
+        author_id: str,
+        first: int | None = None,
+        after: str | None = None,
+        last: int | None = None,
+        before: str | None = None,
+    ) -> tuple[list[Post], bool, bool, int]:
+        try:
+            aid = UUID(author_id)
+        except ValueError:
+            return [], False, False, 0
+        return _paginate_posts(
+            session,
+            base_stmt=select(Post).where(Post.author_id == aid),
+            count_stmt=select(func.count())
+            .select_from(Post)
+            .where(Post.author_id == aid),
+            first=first,
+            after=after,
+            last=last,
+            before=before,
+        )
 
     @staticmethod
     def encode_cursor(post: Post) -> str:
         return _encode_cursor(post.created_at, post.id)
-
-    @staticmethod
-    def list_by_author(session: Session, author_id: str) -> list[Post]:
-        try:
-            aid = UUID(author_id)
-        except ValueError:
-            return []
-        stmt = select(Post).where(Post.author_id == aid).order_by(Post.created_at.desc())
-        return list(session.exec(stmt).all())
 
     @staticmethod
     def get_post(session: Session, post_id: str) -> Post:

@@ -5,7 +5,7 @@ import strawberry
 from strawberry.types import Info
 
 if TYPE_CHECKING:
-    from app.modules.posts.types import Post
+    from app.modules.posts.types import PostConnection
 
 
 @strawberry.type
@@ -28,13 +28,40 @@ class User:
 
     @strawberry.field
     def posts(
-        self, info: Info
-    ) -> list[Annotated["Post", strawberry.lazy("app.modules.posts.types")]]:
+        self,
+        info: Info,
+        first: Optional[int] = None,
+        after: Optional[str] = None,
+        last: Optional[int] = None,
+        before: Optional[str] = None,
+    ) -> Annotated["PostConnection", strawberry.lazy("app.modules.posts.types")]:
         from app.modules.posts.service import PostService
-        from app.modules.posts.types import Post
+        from app.modules.posts.types import PageInfo, Post, PostConnection, PostEdge
 
-        rows = PostService.list_by_author(info.context.session, str(self.id))
-        return [Post.from_model(r) for r in rows]
+        nodes, has_next_page, has_previous_page, total_count = (
+            PostService.list_by_author_connection(
+                info.context.session,
+                author_id=str(self.id),
+                first=first,
+                after=after,
+                last=last,
+                before=before,
+            )
+        )
+        edges = [
+            PostEdge(cursor=PostService.encode_cursor(row), node=Post.from_model(row))
+            for row in nodes
+        ]
+        return PostConnection(
+            edges=edges,
+            page_info=PageInfo(
+                has_next_page=has_next_page,
+                has_previous_page=has_previous_page,
+                start_cursor=edges[0].cursor if edges else None,
+                end_cursor=edges[-1].cursor if edges else None,
+            ),
+            total_count=total_count,
+        )
 
 
 @strawberry.type
