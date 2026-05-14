@@ -66,7 +66,21 @@ class UserService:
         if user is None:
             raise GraphQLError("User not found")
         return user
-    
+
+    @staticmethod
+    def get_users_by_ids(session: Session, user_ids: list[str]) -> dict[str, User]:
+        """Batch fetch. Returns map of str(id) -> User. Invalid ids silently dropped."""
+        valid: list[UUID] = []
+        for raw in user_ids:
+            try:
+                valid.append(UUID(raw))
+            except ValueError:
+                continue
+        if not valid:
+            return {}
+        rows = session.exec(select(User).where(User.id.in_(valid))).all()
+        return {str(r.id): r for r in rows}
+
 
     @staticmethod
     def list_users_page(

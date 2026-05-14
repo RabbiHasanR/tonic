@@ -27,7 +27,7 @@ class User:
         )
 
     @strawberry.field
-    def posts(
+    async def posts(
         self,
         info: Info,
         first: Optional[int] = None,
@@ -39,16 +39,26 @@ class User:
         from app.modules.posts.service import PostService
         from app.modules.posts.types import Post, PostConnection, PostEdge
 
-        nodes, has_next_page, has_previous_page, total_count = (
-            PostService.list_by_author_connection(
-                info.context.session,
-                author_id=str(self.id),
-                first=first,
-                after=after,
-                last=last,
-                before=before,
+        author_id = str(self.id)
+        can_batch = after is None and before is None and last is None
+        if can_batch:
+            limit = max(1, min(first if first is not None else 20, 100))
+            nodes, has_next_page = await info.context.loaders.posts_by_author.load(
+                (author_id, limit)
             )
-        )
+            has_previous_page = False
+        else:
+            nodes, has_next_page, has_previous_page, _ = (
+                PostService.list_by_author_connection(
+                    info.context.session,
+                    author_id=author_id,
+                    first=first,
+                    after=after,
+                    last=last,
+                    before=before,
+                    with_count=False,
+                )
+            )
         edges = [
             PostEdge(cursor=PostService.encode_cursor(row), node=Post.from_model(row))
             for row in nodes
@@ -61,7 +71,8 @@ class User:
                 start_cursor=edges[0].cursor if edges else None,
                 end_cursor=edges[-1].cursor if edges else None,
             ),
-            total_count=total_count,
+            _count_kind="by_author",
+            _count_key=author_id,
         )
 
 

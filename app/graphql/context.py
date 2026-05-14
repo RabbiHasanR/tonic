@@ -8,17 +8,20 @@ from strawberry.fastapi import BaseContext
 
 from app.core.database import get_session
 from app.core.security import decode_access_token
+from app.graphql.loaders import Loaders
 from app.modules.users.models import User
 
 
 class Context(BaseContext):
-    """Per-request GraphQL context. Resolvers access session via `info.context.session`
-    and the authenticated user (if any) via `info.context.user`."""
+    """Per-request GraphQL context. Resolvers access session via `info.context.session`,
+    the authenticated user via `info.context.user`, and per-request DataLoaders
+    via `info.context.loaders`."""
 
     def __init__(self, session: Session, user: Optional[User] = None):
         super().__init__()
         self.session = session
         self.user = user
+        self.loaders = Loaders.for_session(session)
 
 
 def _resolve_user(request: Request, session: Session) -> Optional[User]:

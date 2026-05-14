@@ -18,13 +18,14 @@ class PostsQuery:
         last: int | None = None,
         before: str | None = None,
     ) -> PostConnection:
-        nodes, has_next_page, has_previous_page, total_count = (
+        nodes, has_next_page, has_previous_page, _ = (
             PostService.list_posts_connection(
                 info.context.session,
                 first=first,
                 after=after,
                 last=last,
                 before=before,
+                with_count=False,
             )
         )
         edges = [
@@ -39,7 +40,8 @@ class PostsQuery:
                 start_cursor=edges[0].cursor if edges else None,
                 end_cursor=edges[-1].cursor if edges else None,
             ),
-            total_count=total_count,
+            _count_kind="root",
+            _count_key=None,
         )
 
     @strawberry.field

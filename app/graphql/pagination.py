@@ -84,6 +84,7 @@ def paginate(
     direction: Direction = "desc",
     default_limit: int = 20,
     max_limit: int = 100,
+    with_count: bool = True,
 ) -> tuple[list, bool, bool, int]:
     """Relay cursor pagination over a (sort_col, id_col) composite key.
 
@@ -137,5 +138,5 @@ def paginate(
         nodes.reverse()
         has_next_page = before is not None
 
-    total_count = int(session.exec(count_stmt).one())
+    total_count = int(session.exec(count_stmt).one()) if with_count else 0
     return nodes, has_next_page, has_previous_page, total_count

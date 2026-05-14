@@ -31,4 +31,5 @@ class UsersMutation:
         row = UserService.update_profile(
             info.context.session, user=current, display_name=input.display_name
         )
+        info.context.loaders.invalidate_user(str(row.id))
         return User.from_model(row)

@@ -18,6 +18,7 @@ class CommentsMutation:
             post_id=str(input.post_id),
             body=input.body,
         )
+        info.context.loaders.invalidate_post_comments(str(row.post_id))
         return Comment.from_model(row)
 
     @strawberry.mutation
@@ -29,12 +30,16 @@ class CommentsMutation:
             actor_id=user.id,
             body=input.body,
         )
+        # Body changed; drop the connection cache so re-reads see fresh text.
+        # Count is unaffected by an update.
+        info.context.loaders.comments_by_post.clear_all()
         return Comment.from_model(row)
 
     @strawberry.mutation
     def delete_comment(self, info: Info, id: strawberry.ID) -> bool:
         user = require_user(info)
-        CommentService.delete_comment(
+        post_id = CommentService.delete_comment(
             info.context.session, comment_id=str(id), actor_id=user.id
         )
+        info.context.loaders.invalidate_post_comments(post_id)
         return True

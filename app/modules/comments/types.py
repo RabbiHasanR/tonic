@@ -1,5 +1,5 @@
 from datetime import datetime
-from typing import TYPE_CHECKING, Annotated
+from typing import TYPE_CHECKING, Annotated, Optional
 
 import strawberry
 from strawberry.types import Info
@@ -31,13 +31,16 @@ class Comment:
         )
 
     @strawberry.field
-    def author(
+    async def author(
         self, info: Info
     ) -> Annotated["User", strawberry.lazy("app.modules.users.types")]:
-        from app.modules.users.service import UserService
+        from strawberry.exceptions import GraphQLError
+
         from app.modules.users.types import User
 
-        row = UserService.get_user(info.context.session, self.author_id)
+        row = await info.context.loaders.user_by_id.load(self.author_id)
+        if row is None:
+            raise GraphQLError("Author not found")
         return User.from_model(row)
 
 
@@ -63,4 +66,14 @@ class CommentEdge:
 class CommentConnection:
     edges: list[CommentEdge]
     page_info: PageInfo
-    total_count: int
+    # Lazy totalCount. kind="by_post" routes through the batched count loader.
+    _count_kind: strawberry.Private[str] = "by_post"
+    _count_key: strawberry.Private[Optional[str]] = None
+
+    @strawberry.field
+    async def total_count(self, info: Info) -> int:
+        if self._count_kind == "by_post" and self._count_key is not None:
+            return await info.context.loaders.comment_count_by_post.load(
+                self._count_key
+            )
+        return 0
