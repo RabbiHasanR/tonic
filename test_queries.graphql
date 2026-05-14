@@ -343,3 +343,171 @@ mutation DeleteComment {
 query Ping {
   ping
 }
+
+
+# ============================================================
+# APQ (Automatic Persisted Queries) test queries
+# ------------------------------------------------------------
+# APQ is tested via curl, NOT GraphiQL (GraphiQL always sends
+# the full query body). The strings below are the EXACT bytes
+# that get hashed — keep formatting identical when copying into
+# shell vars, or the sha256 will not match.
+#
+# Compute hash:
+#   echo -n "$QUERY" | sha256sum
+# ============================================================
+
+# APQ-1: cacheable single-resource read (root field `post`)
+query ApqPost { post(id: "1") { id title } }
+
+# APQ-2: cacheable list, first page (root field `posts`, no `after`)
+query ApqPostsFirstPage { posts(first: 5) { totalCount edges { node { id title } } } }
+
+# APQ-3: same list but deeper page — should NOT be cached
+query ApqPostsAfter($after: String) { posts(first: 5, after: $after) { edges { node { id } } } }
+
+# APQ-4: non-listed root field — should be no-store
+query ApqPing { ping }
+
+
+
+
+
+
+
+
+
+
+
+
+
+# test APQ using curl from terminal
+
+URL="http://localhost:8000/graphql"
+
+# ---- Scenario A: POST hash-only on a COLD cache → PersistedQueryNotFound ----
+Q='query ApqPost { post(id: "1") { id title } }'
+HASH=$(printf '%s' "$Q" | sha256sum | awk '{print $1}')
+echo "hash = $HASH"
+
+curl -s "$URL" -H 'content-type: application/json' -d "{
+  \"extensions\": {\"persistedQuery\": {\"version\":1, \"sha256Hash\":\"$HASH\"}}
+}"
+# Expect: {"errors":[{"message":"PersistedQueryNotFound", ...}]}
+
+# ---- Scenario B: POST register (hash + query) → stores in Redis, executes ----
+curl -s -i "$URL" -H 'content-type: application/json' -d "{
+  \"query\": $(printf '%s' "$Q" | jq -Rs .),
+  \"extensions\": {\"persistedQuery\": {\"version\":1, \"sha256Hash\":\"$HASH\"}}
+}"
+# Expect: 200 with data, AND response header: cache-control: public, max-age=60, s-maxage=600
+
+# ---- Scenario C: POST hash-only again (WARM cache) → executes via lookup ----
+curl -s -i "$URL" -H 'content-type: application/json' -d "{
+  \"extensions\": {\"persistedQuery\": {\"version\":1, \"sha256Hash\":\"$HASH\"}}
+}"
+# Expect: same data, same cache-control header — confirms Redis hit
+
+# ---- Scenario D: GET with hash-only (warm) → executes, cacheable ----
+EXT=$(printf '{"persistedQuery":{"version":1,"sha256Hash":"%s"}}' "$HASH" | jq -sRr @uri)
+curl -s -i "$URL?extensions=$EXT"
+# Expect: 200 + cache-control: public, max-age=60, s-maxage=600
+
+# ---- Scenario E: poisoning attempt — hash does NOT match query ----
+curl -s "$URL" -H 'content-type: application/json' -d '{
+  "query": "query Evil { ping }",
+  "extensions": {"persistedQuery": {"version":1, "sha256Hash":"deadbeef00000000000000000000000000000000000000000000000000000000"}}
+}'
+# Expect: {"errors":[{"message":"Persisted query hash mismatch"}]} with HTTP 400
+
+# ---- Scenario F: errors override cache to no-store ----
+QBAD='query Bad { post(id: "does-not-exist") { id } }'
+HBAD=$(printf '%s' "$QBAD" | sha256sum | awk '{print $1}')
+curl -s -i "$URL" -H 'content-type: application/json' -d "{
+  \"query\": $(printf '%s' "$QBAD" | jq -Rs .),
+  \"extensions\": {\"persistedQuery\": {\"version\":1, \"sha256Hash\":\"$HBAD\"}}
+}"
+# Expect: errors[] in body AND cache-control: no-store
+
+# ---- Scenario G: `posts` with `after` cursor → downgraded to no-store ----
+QP='query ApqPostsAfter($after: String) { posts(first: 5, after: $after) { edges { node { id } } } }'
+HP=$(printf '%s' "$QP" | sha256sum | awk '{print $1}')
+curl -s -i "$URL" -H 'content-type: application/json' -d "{
+  \"query\": $(printf '%s' "$QP" | jq -Rs .),
+  \"variables\": {\"after\": \"some-cursor\"},
+  \"extensions\": {\"persistedQuery\": {\"version\":1, \"sha256Hash\":\"$HP\"}}
+}"
+# Expect: cache-control: no-store (because variables.after is set)
+
+# ---- Scenario H: mutation should always be no-store ----
+QM='mutation { login(input:{email:"x",password:"y"}) { token } }'
+curl -s -i "$URL" -H 'content-type: application/json' --data-raw "{\"query\": $(printf '%s' "$QM" | jq -Rs .)}"
+# Expect: cache-control: no-store (root op is `mutation`)
+
+
+
+
+
+
+
+
+URL="http://localhost:8000/graphql"
+Q='query ApqPost { post(id: "89bbda5c-e360-4bc2-9cbf-ef4b617be165") { id title } }'
+HASH=$(printf '%s' "$Q" | sha256sum | awk '{print $1}')
+echo "hash = $HASH"
+
+curl -s "$URL" -H 'content-type: application/json' -d "{
+  \"extensions\": {\"persistedQuery\": {\"version\":1, \"sha256Hash\":\"$HASH\"}}
+}"
+
+
+
+URL="http://localhost:8000/graphql"
+Q='query ApqPost { post(id: "89bbda5c-e360-4bc2-9cbf-ef4b617be165") { id title } }'
+HASH='ec3f7f15aa6d79cb78023762a3a32ebd7cabef025b3f2e7f48ecbec71d6f82c3'
+curl -s -i "$URL" -H 'content-type: application/json' -d "{
+  \"query\": $(printf '%s' "$Q" | jq -Rs .),
+  \"extensions\": {\"persistedQuery\": {\"version\":1, \"sha256Hash\":\"$HASH\"}}
+}"
+
+
+
+URL="http://localhost:8000/graphql"
+HASH='ec3f7f15aa6d79cb78023762a3a32ebd7cabef025b3f2e7f48ecbec71d6f82c3'
+curl -s -i "$URL" -H 'content-type: application/json' -d "{
+  \"extensions\": {\"persistedQuery\": {\"version\":1, \"sha256Hash\":\"$HASH\"}}
+}"
+
+
+
+URL="http://localhost:8000/graphql"
+HASH='ec3f7f15aa6d79cb78023762a3a32ebd7cabef025b3f2e7f48ecbec71d6f82c3'
+EXT=$(printf '{"persistedQuery":{"version":1,"sha256Hash":"%s"}}' "$HASH" | jq -sRr @uri)
+curl -s -i "$URL?extensions=$EXT"
+
+
+
+
+URL="http://localhost:8000/graphql"
+QBAD='query Bad { post(id: "does-not-exist") { id } }'
+HBAD=$(printf '%s' "$QBAD" | sha256sum | awk '{print $1}')
+curl -s -i "$URL" -H 'content-type: application/json' -d "{
+  \"query\": $(printf '%s' "$QBAD" | jq -Rs .),
+  \"extensions\": {\"persistedQuery\": {\"version\":1, \"sha256Hash\":\"$HBAD\"}}
+}"
+
+
+URL="http://localhost:8000/graphql"
+QP='query ApqPostsAfter($after: String) { posts(first: 5, after: $after) { edges { node { id } } } }'
+HP=$(printf '%s' "$QP" | sha256sum | awk '{print $1}')
+curl -s -i "$URL" -H 'content-type: application/json' -d "{
+  \"query\": $(printf '%s' "$QP" | jq -Rs .),
+  \"variables\": {\"after\": \"some-cursor\"},
+  \"extensions\": {\"persistedQuery\": {\"version\":1, \"sha256Hash\":\"$HP\"}}
+  
+}"
+
+
+URL="http://localhost:8000/graphql"
+QM='mutation { login(input:{email:"x",password:"y"}) { token } }'
+curl -s -i "$URL" -H 'content-type: application/json' --data-raw "{\"query\": $(printf '%s' "$QM" | jq -Rs .)}"

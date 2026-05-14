@@ -171,6 +171,27 @@ Each entry explains *why* a choice was made — and why alternatives were not.
 **Why not client-side emulation:** Pushes spec complexity onto every consumer and prevents the server from giving a correct `hasPreviousPage` count.
 **Trade-offs accepted:** Resolver/service surface doubles (two branches, four args, four validation checks). The `hasNextPage`/`hasPreviousPage` in the *non-paginated* direction is a hint, not a count — consistent with the Relay spec but worth documenting if a client relies on it.
 
+## 2026-05-14 — Automatic Persisted Queries (APQ) over GET for public reads
+
+**Context:** The three truly public queries (`post(id)`, `posts(...)`, `user(id)`) are good HTTP-cache targets — same response for every caller — but real GraphQL queries blow past the ~2 KB GET URL limit, so we couldn't use GET. Authenticated queries (`me`, `users`) stay on POST regardless; they have no CDN-cacheable shape.
+**Decision:** Adopt the Apollo APQ protocol. Clients send `extensions.persistedQuery.sha256Hash` instead of the full query; on first miss they retry with the query body and the server stores it. Implemented as an ASGI middleware (`app/graphql/apq/middleware.py`) — not a Strawberry `SchemaExtension` — because Strawberry's HTTP view rejects bodies without a `query` field before any extension runs. The same middleware also injects `Cache-Control` headers based on the resolved query's root field: `post`/`user` get `public, max-age=60, s-maxage=600`, `posts` first page gets `public, max-age=30, s-maxage=60`, everything else (including any response with `errors`) gets `no-store`.
+**Alternatives considered:** Strawberry SchemaExtension (rejected — wrong layer), subclassing `strawberry.fastapi.GraphQLRouter` (more invasive than middleware), no APQ + use POST-only with Redis response cache.
+**Why this:** Middleware sits in front of Strawberry unchanged, no schema-layer surgery; one place owns both APQ and cache-header policy, so the resolved query is reused. Apollo/urql clients support the protocol out of the box, so client-side cost is a config flag. Mutations and authenticated queries are unaffected.
+**Why not Strawberry extension:** The HTTP view raises `MissingQueryError` before any `SchemaExtension` hook fires. There's no clean way to backfill the query from inside the schema executor.
+**Why not custom router:** Subclassing `GraphQLRouter` requires reimplementing request parsing; the middleware approach is smaller and decoupled.
+**Trade-offs accepted:** Response body is buffered once in the wrapped `send` so we can downgrade to `no-store` when `errors` is present — fine for typical GraphQL response sizes, would need re-evaluation if we ever stream responses. Root-field detection is a regex (`_ROOT_FIELD_RE`) rather than a real GraphQL parser; fine for our actual queries, but a query with `{ # weird comment\n post ... }` would slip past — acceptable today.
+
+## 2026-05-14 — Redis as the APQ hash store
+
+**Context:** APQ needs a `hash → query` map shared across all uvicorn workers and surviving restarts. The map is pure cache state, not application data.
+**Decision:** Run Redis (`redis:7-alpine`) as a sibling service in docker-compose with AOF persistence. App connects via `settings.REDIS_URL` (default `redis://redis:6379/0`). Keys prefixed `apq:`, TTL 30 days. Use `redis.asyncio` so the async resolvers don't block.
+**Alternatives considered:** In-memory Python dict, a `persisted_queries` Postgres table.
+**Why this:** With multiple workers (current dev uses one `uvicorn --reload`; prod uses gunicorn workers), an in-memory dict would force each worker to relearn each query independently. Redis gives one shared map with TTL eviction and survives `docker compose restart app`. Keeps cache state physically separate from Postgres so application transactions never collide with cache writes.
+**Why not in-memory:** Per-worker duplication of the first-request cost; lost on restart.
+**Why not Postgres:** Every GraphQL request would incur a DB roundtrip just to resolve a hash; mixes cache state with application schema.
+**Trade-offs accepted:** New container, new dependency (`redis>=5.0`). Worth it given Redis is the standard answer for this class of problem and we'll likely reuse it for response caching, rate limiting, and session denylists later.
+**Future use:** Currently only the APQ hash store. Response-level caching and rate limiting may share this Redis instance later — that's expected and fine.
+
 ## 2026-05-13 — Page (offset) pagination for top-level `users` list
 
 **Context:** The `users` resolver previously took only `limit` (half-pagination — no way to reach page 2). We need full pagination for an admin-style user list. Posts and comments already use Relay cursor pagination.

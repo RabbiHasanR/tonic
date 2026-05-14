@@ -4,6 +4,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.middleware.gzip import GZipMiddleware
 from fastapi.middleware.trustedhost import TrustedHostMiddleware
 from app.core.config import settings
+from app.graphql.apq.middleware import GraphQLAPQMiddleware
 from app.graphql.router import graphql_router
 
 
@@ -21,6 +22,10 @@ app = FastAPI(
 )
 
 # Middleware order: outermost runs first. Registration is reverse: last add = outermost.
+# APQ middleware sits inside GZip so it sees uncompressed bodies; outside the
+# GraphQL router so it can intercept before Strawberry's HTTP view rejects
+# query-less requests.
+app.add_middleware(GraphQLAPQMiddleware)
 app.add_middleware(GZipMiddleware, minimum_size=1000)
 app.add_middleware(
     CORSMiddleware,

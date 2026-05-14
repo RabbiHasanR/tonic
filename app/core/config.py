@@ -25,6 +25,9 @@ class Settings(BaseSettings):
     JWT_ALGORITHM: str = "HS256"
     ACCESS_TOKEN_EXPIRE_MINUTES: int = 60
 
+    # Redis — APQ hash store
+    REDIS_URL: str = "redis://redis:6379/0"
+
     @computed_field
     @property
     def DATABASE_URL(self) -> str:

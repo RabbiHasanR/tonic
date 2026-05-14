@@ -24,6 +24,7 @@ them. Resolvers contain no business logic — they call into module services.
 | Web framework | FastAPI |
 | GraphQL library | strawberry-graphql[fastapi] |
 | Database | PostgreSQL |
+| Cache / APQ store | Redis |
 | ORM | SQLModel |
 | Migrations | Alembic |
 | Settings | pydantic-settings |
@@ -76,7 +77,7 @@ docker-compose.yml          # postgres + app (dev hot-reload)
            │
            ▼
 ┌─────────────────────┐
-│ Middleware stack    │  TrustedHost → CORS → GZip
+│ Middleware stack    │  TrustedHost → CORS → GZip → GraphQLAPQ
 └──────────┬──────────┘
            │
            ▼
@@ -118,8 +119,15 @@ docker-compose.yml          # postgres + app (dev hot-reload)
 
 ## Request Flow
 
-1. Client POSTs a GraphQL document to `/graphql`.
-2. Middleware stack runs **outer → inner**: TrustedHost → CORS → GZip.
+1. Client sends a GraphQL request to `/graphql` — POST with a JSON body for
+   mutations and most queries, or GET with `query`/`variables`/`extensions`
+   query params for public reads using APQ.
+2. Middleware stack runs **outer → inner**: TrustedHost → CORS → GZip →
+   GraphQLAPQ. The APQ layer resolves any `persistedQuery` hash via Redis
+   (returning `PersistedQueryNotFound` on miss), then on the response side
+   injects a `Cache-Control` header derived from the resolved query's root
+   field (`public, max-age=…` for `post`/`user`/`posts` first page;
+   `no-store` for everything else and any response carrying `errors`).
 3. `GraphQLRouter` parses the request and runs `get_context(...)`, which depends on `get_session()` to produce a fresh `Session`.
 4. Strawberry resolves the operation: each `@strawberry.field` / `@strawberry.mutation` runs its resolver with `info.context.session` available.
 5. The resolver calls a service method (`{Name}Service.{action}(session, ...)`).
@@ -196,7 +204,20 @@ All config flows through `app.core.config.settings` (pydantic-settings `BaseSett
 
 ## External Integrations
 
-_(none yet — log here when adding Redis, S3, message queues, third-party APIs, etc.)_
+### Redis — APQ hash store
+
+- **Service:** `redis:7-alpine` in `docker-compose.yml`, AOF persistence on a
+  named `redis_data` volume, healthchecked via `redis-cli ping`.
+- **Connection:** `app.graphql.apq.store.APQStore` uses `redis.asyncio` and
+  reads `settings.REDIS_URL` (default `redis://redis:6379/0`).
+- **Sole current use:** Maps `sha256(query) → query string` for Automatic
+  Persisted Queries. Keys prefixed `apq:`, TTL 30 days.
+- **Why it's here:** Multiple uvicorn workers share one store; survives app
+  container restarts. See `DECISIONS.md` (2026-05-14 entries) for the full
+  rationale.
+
+_(no other external integrations yet — log here when adding S3, message
+queues, third-party APIs, etc.)_
 
 ---
 
