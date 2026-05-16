@@ -31,6 +31,24 @@ Each entry explains *why* a choice was made — and why alternatives were not.
 
 ---
 
+## 2026-05-16 — Cache-aside on single-entity reads (Phase 1)
+
+**Context:** Resolver layer for `users`, `posts`, `comments` re-reads the same hot entities (a popular post, the author of every post in a feed) on every request. APQ caches query *documents* and DataLoaders batch within a request, but there is no cross-request data cache yet.
+**Decision:** Adopt **cache-aside** (lazy loading) at the **service layer** for single-entity reads only. Touched methods: `PostService.get_post`, `UserService.get_user`, `CommentService.get_comment`. Storage: existing Redis (`settings.REDIS_URL`) using the sync `redis` client via a new `app/core/cache.py`. Values are JSON-encoded dicts with explicit per-module serializers. Keys: `post:{id}` / `user:{id}` / `comment:{id}`. TTLs: 300s for posts and comments, 600s for users. Invalidation: `create_*` populates the key, `update_*` and `delete_*` `cache_delete` it. Cache misses and Redis errors fail open (fall through to Postgres). Update/delete mutations re-read from DB (not via the cached `get_*`) so the SQLAlchemy `Session` always works with attached instances.
+**Alternatives considered:** Read-through (cache library owns DB access), write-through (mutations write to cache + DB synchronously), write-behind (queue writes), resolver-layer caching, no caching at all.
+**Why this:** Cache-aside is the safest default for a read-heavy GraphQL API. Resilient — Redis down still serves traffic. Maps naturally to GraphQL's per-field resolution. Service-layer placement means every code path that fetches an entity (root resolver, nested `Post.author`, mutation re-fetch) shares the same cache without changing DataLoader code. Explicit `cache_get/cache_set/cache_delete` calls keep invalidation visible at the mutation site rather than hidden inside a decorator.
+**Why not read-through:** Would require a library that owns DB access; doesn't fit our SQLModel + static-method service pattern cleanly.
+**Why not write-through:** Adds latency to every mutation for marginal benefit on a read-skewed workload, and most resolvers re-read the row right after mutating anyway.
+**Why not write-behind:** Async write queues risk data loss on crash and add operational complexity disproportionate to the gain at this stage.
+**Why not resolver-layer:** Would duplicate cache logic across queries that hit the same service method, and double-cache when a nested field and a root field resolve the same entity in one request.
+**Why sync `redis` (not `redis.asyncio` like APQ):** Services are sync (SQLModel `Session` is sync). Making services async to use `redis.asyncio` would be a larger refactor with no real benefit — cache calls are sub-millisecond local network ops. APQ keeps the async client because it lives inside an ASGI middleware where async is natural.
+**Why JSON, not pickle:** Inspectable via `redis-cli GET`, safe against deserialization bugs, language-agnostic if we ever read this from another service.
+**Why explicit serializers, not `SQLModel.model_dump()`:** Reconstituted detached models with `model_validate` can subtly affect lazy attrs; an explicit shape is predictable and surfaces shape drift loudly when columns change.
+**Why `update_*` deletes rather than re-populates:** A delete forces the next read to repopulate from authoritative DB state, avoiding cache drift if a column is added but the serializer isn't updated.
+**Trade-offs accepted:** Phase 1 covers only single-entity reads — list queries (`posts(...)`, `users(...)`, `Post.comments`), negative caching, stampede protection, and stale-while-revalidate are deferred to Phase 2/3. No tests or metrics yet — log-level visibility only (`logger.warning` on Redis errors). Cached entities are detached SQLModel instances; mutation paths intentionally bypass the cache and re-read from DB to keep `session.add`/`session.delete` safe.
+
+---
+
 ## 2026-05-10 — Use FastAPI as the web framework
 **Context:** Choosing the Python web framework that hosts the GraphQL endpoint.
 **Decision:** FastAPI.

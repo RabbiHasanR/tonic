@@ -24,7 +24,7 @@ them. Resolvers contain no business logic — they call into module services.
 | Web framework | FastAPI |
 | GraphQL library | strawberry-graphql[fastapi] |
 | Database | PostgreSQL |
-| Cache / APQ store | Redis |
+| Cache / APQ store / entity cache | Redis |
 | ORM | SQLModel |
 | Migrations | Alembic |
 | Settings | pydantic-settings |
@@ -41,6 +41,7 @@ See `DECISIONS.md` for *why* each of these was chosen.
 app/
 ├── core/
 │   ├── config.py           # Settings (loaded from .env via pydantic-settings)
+│   ├── cache.py            # Sync Redis cache-aside helpers used by services
 │   └── database.py         # SQLAlchemy engine + get_session() dependency
 ├── graphql/
 │   ├── schema.py           # Merges per-module Query/Mutation into the root schema
@@ -204,17 +205,29 @@ All config flows through `app.core.config.settings` (pydantic-settings `BaseSett
 
 ## External Integrations
 
-### Redis — APQ hash store
+### Redis — APQ hash store + service-layer entity cache
 
 - **Service:** `redis:7-alpine` in `docker-compose.yml`, AOF persistence on a
   named `redis_data` volume, healthchecked via `redis-cli ping`.
-- **Connection:** `app.graphql.apq.store.APQStore` uses `redis.asyncio` and
-  reads `settings.REDIS_URL` (default `redis://redis:6379/0`).
-- **Sole current use:** Maps `sha256(query) → query string` for Automatic
-  Persisted Queries. Keys prefixed `apq:`, TTL 30 days.
+- **Two clients, one Redis:**
+  - `app.graphql.apq.store.APQStore` uses `redis.asyncio` from inside the
+    APQ middleware (async path).
+  - `app.core.cache` uses the sync `redis` client from the service layer
+    (`Session` is sync). Same `settings.REDIS_URL`, different key prefixes,
+    no shared connection pool.
+- **Uses:**
+  - `apq:{hash}` → query string for Automatic Persisted Queries (TTL 30 days).
+  - `post:{id}` / `user:{id}` / `comment:{id}` → JSON-encoded entity snapshot
+    populated by `{Post,User,Comment}Service.get_*` and invalidated by the
+    corresponding `create_*`/`update_*`/`delete_*` mutations. TTL 300s for
+    posts/comments, 600s for users.
+- **Failure mode:** Cache calls fail open — `RedisError` is logged and the
+  service falls through to Postgres. Redis being down must never break the API.
 - **Why it's here:** Multiple uvicorn workers share one store; survives app
-  container restarts. See `DECISIONS.md` (2026-05-14 entries) for the full
-  rationale.
+  container restarts. See `DECISIONS.md` (2026-05-14 and 2026-05-16 entries)
+  for the full rationale.
+- **Not cached yet:** list/connection queries, `Post.comments`, `me`,
+  authentication-scoped data. Planned for Phase 2/3.
 
 _(no other external integrations yet — log here when adding S3, message
 queues, third-party APIs, etc.)_

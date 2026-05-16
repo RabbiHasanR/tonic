@@ -1,3 +1,4 @@
+from datetime import datetime
 from uuid import UUID
 
 from sqlalchemy import func
@@ -5,9 +6,38 @@ from sqlalchemy.orm import aliased
 from sqlmodel import Session, select
 from strawberry.exceptions import GraphQLError
 
+from app.core.cache import cache_delete, cache_get, cache_set
 from app.graphql.pagination import encode_cursor, paginate
 
 from .models import Post
+
+POST_CACHE_TTL = 300
+
+
+def _post_cache_key(post_id: str) -> str:
+    return f"post:{post_id}"
+
+
+def _serialize_post(p: Post) -> dict:
+    return {
+        "id": str(p.id),
+        "author_id": str(p.author_id),
+        "title": p.title,
+        "body": p.body,
+        "created_at": p.created_at.isoformat(),
+        "updated_at": p.updated_at.isoformat() if p.updated_at else None,
+    }
+
+
+def _deserialize_post(d: dict) -> Post:
+    return Post(
+        id=UUID(d["id"]),
+        author_id=UUID(d["author_id"]),
+        title=d["title"],
+        body=d["body"],
+        created_at=datetime.fromisoformat(d["created_at"]),
+        updated_at=datetime.fromisoformat(d["updated_at"]) if d["updated_at"] else None,
+    )
 
 
 class PostService:
@@ -143,9 +173,16 @@ class PostService:
             pid = UUID(post_id)
         except ValueError as exc:
             raise GraphQLError("Post not found") from exc
+
+        cached = cache_get(_post_cache_key(post_id))
+        if cached is not None:
+            return _deserialize_post(cached)
+
         post = session.get(Post, pid)
         if post is None:
             raise GraphQLError("Post not found")
+
+        cache_set(_post_cache_key(post_id), _serialize_post(post), ttl=POST_CACHE_TTL)
         return post
 
     @staticmethod
@@ -158,6 +195,9 @@ class PostService:
         session.add(post)
         session.commit()
         session.refresh(post)
+        cache_set(
+            _post_cache_key(str(post.id)), _serialize_post(post), ttl=POST_CACHE_TTL
+        )
         return post
 
     @staticmethod
@@ -168,7 +208,13 @@ class PostService:
         title: str | None,
         body: str | None,
     ) -> Post:
-        post = PostService.get_post(session, post_id)
+        try:
+            pid = UUID(post_id)
+        except ValueError as exc:
+            raise GraphQLError("Post not found") from exc
+        post = session.get(Post, pid)
+        if post is None:
+            raise GraphQLError("Post not found")
         if post.author_id != actor_id:
             raise GraphQLError("Not authorized to update this post")
         if title is not None:
@@ -182,14 +228,22 @@ class PostService:
         session.add(post)
         session.commit()
         session.refresh(post)
+        cache_delete(_post_cache_key(post_id))
         return post
 
     @staticmethod
     def delete_post(session: Session, post_id: str, actor_id: UUID) -> str:
-        post = PostService.get_post(session, post_id)
+        try:
+            pid = UUID(post_id)
+        except ValueError as exc:
+            raise GraphQLError("Post not found") from exc
+        post = session.get(Post, pid)
+        if post is None:
+            raise GraphQLError("Post not found")
         if post.author_id != actor_id:
             raise GraphQLError("Not authorized to delete this post")
         author_id = str(post.author_id)
         session.delete(post)
         session.commit()
+        cache_delete(_post_cache_key(post_id))
         return author_id

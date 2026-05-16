@@ -1,13 +1,43 @@
+from datetime import datetime
 from uuid import UUID
 
 from sqlalchemy import func
 from sqlmodel import Session, select
 from strawberry.exceptions import GraphQLError
 
+from app.core.cache import cache_delete, cache_get, cache_set
 from app.core.security import hash_password, verify_password
 from app.graphql.pagination import PageMeta, offset_paginate
 
 from .models import User
+
+USER_CACHE_TTL = 600
+
+
+def _user_cache_key(user_id: str) -> str:
+    return f"user:{user_id}"
+
+
+def _serialize_user(u: User) -> dict:
+    return {
+        "id": str(u.id),
+        "email": u.email,
+        "password_hash": u.password_hash,
+        "display_name": u.display_name,
+        "created_at": u.created_at.isoformat(),
+        "updated_at": u.updated_at.isoformat() if u.updated_at else None,
+    }
+
+
+def _deserialize_user(d: dict) -> User:
+    return User(
+        id=UUID(d["id"]),
+        email=d["email"],
+        password_hash=d["password_hash"],
+        display_name=d["display_name"],
+        created_at=datetime.fromisoformat(d["created_at"]),
+        updated_at=datetime.fromisoformat(d["updated_at"]) if d["updated_at"] else None,
+    )
 
 
 class UserService:
@@ -33,6 +63,9 @@ class UserService:
         session.add(user)
         session.commit()
         session.refresh(user)
+        cache_set(
+            _user_cache_key(str(user.id)), _serialize_user(user), ttl=USER_CACHE_TTL
+        )
         return user
 
     @staticmethod
@@ -54,6 +87,7 @@ class UserService:
         session.add(user)
         session.commit()
         session.refresh(user)
+        cache_delete(_user_cache_key(str(user.id)))
         return user
 
     @staticmethod
@@ -62,9 +96,16 @@ class UserService:
             uid = UUID(user_id)
         except ValueError as exc:
             raise GraphQLError("User not found") from exc
+
+        cached = cache_get(_user_cache_key(user_id))
+        if cached is not None:
+            return _deserialize_user(cached)
+
         user = session.get(User, uid)
         if user is None:
             raise GraphQLError("User not found")
+
+        cache_set(_user_cache_key(user_id), _serialize_user(user), ttl=USER_CACHE_TTL)
         return user
 
     @staticmethod

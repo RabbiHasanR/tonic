@@ -1,3 +1,4 @@
+from datetime import datetime
 from uuid import UUID
 
 from sqlalchemy import func
@@ -5,10 +6,39 @@ from sqlalchemy.orm import aliased
 from sqlmodel import Session, select
 from strawberry.exceptions import GraphQLError
 
+from app.core.cache import cache_delete, cache_get, cache_set
 from app.graphql.pagination import encode_cursor, paginate
 from app.modules.posts.service import PostService
 
 from .models import Comment
+
+COMMENT_CACHE_TTL = 300
+
+
+def _comment_cache_key(comment_id: str) -> str:
+    return f"comment:{comment_id}"
+
+
+def _serialize_comment(c: Comment) -> dict:
+    return {
+        "id": str(c.id),
+        "post_id": str(c.post_id),
+        "author_id": str(c.author_id),
+        "body": c.body,
+        "created_at": c.created_at.isoformat(),
+        "updated_at": c.updated_at.isoformat() if c.updated_at else None,
+    }
+
+
+def _deserialize_comment(d: dict) -> Comment:
+    return Comment(
+        id=UUID(d["id"]),
+        post_id=UUID(d["post_id"]),
+        author_id=UUID(d["author_id"]),
+        body=d["body"],
+        created_at=datetime.fromisoformat(d["created_at"]),
+        updated_at=datetime.fromisoformat(d["updated_at"]) if d["updated_at"] else None,
+    )
 
 
 class CommentService:
@@ -119,9 +149,20 @@ class CommentService:
             cid = UUID(comment_id)
         except ValueError as exc:
             raise GraphQLError("Comment not found") from exc
+
+        cached = cache_get(_comment_cache_key(comment_id))
+        if cached is not None:
+            return _deserialize_comment(cached)
+
         comment = session.get(Comment, cid)
         if comment is None:
             raise GraphQLError("Comment not found")
+
+        cache_set(
+            _comment_cache_key(comment_id),
+            _serialize_comment(comment),
+            ttl=COMMENT_CACHE_TTL,
+        )
         return comment
 
     @staticmethod
@@ -136,13 +177,24 @@ class CommentService:
         session.add(comment)
         session.commit()
         session.refresh(comment)
+        cache_set(
+            _comment_cache_key(str(comment.id)),
+            _serialize_comment(comment),
+            ttl=COMMENT_CACHE_TTL,
+        )
         return comment
 
     @staticmethod
     def update_comment(
         session: Session, comment_id: str, actor_id: UUID, body: str
     ) -> Comment:
-        comment = CommentService.get_comment(session, comment_id)
+        try:
+            cid = UUID(comment_id)
+        except ValueError as exc:
+            raise GraphQLError("Comment not found") from exc
+        comment = session.get(Comment, cid)
+        if comment is None:
+            raise GraphQLError("Comment not found")
         if comment.author_id != actor_id:
             raise GraphQLError("Not authorized to update this comment")
         if not body.strip():
@@ -151,14 +203,22 @@ class CommentService:
         session.add(comment)
         session.commit()
         session.refresh(comment)
+        cache_delete(_comment_cache_key(comment_id))
         return comment
 
     @staticmethod
     def delete_comment(session: Session, comment_id: str, actor_id: UUID) -> str:
-        comment = CommentService.get_comment(session, comment_id)
+        try:
+            cid = UUID(comment_id)
+        except ValueError as exc:
+            raise GraphQLError("Comment not found") from exc
+        comment = session.get(Comment, cid)
+        if comment is None:
+            raise GraphQLError("Comment not found")
         if comment.author_id != actor_id:
             raise GraphQLError("Not authorized to delete this comment")
         post_id = str(comment.post_id)
         session.delete(comment)
         session.commit()
+        cache_delete(_comment_cache_key(comment_id))
         return post_id

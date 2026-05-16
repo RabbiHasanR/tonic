@@ -188,3 +188,21 @@ Note the key includes the **viewer** — different users may see different stats
 3. **Same query served to many anonymous users?** → APQ + CDN.
 4. **UI inconsistency after mutations?** → Client normalized cache + proper mutation updates.
 5. **Stale data showing up?** → Revisit cache key (missing user/tenant?) and invalidation strategy.
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+Phase 1: Add Redis + cache-aside on PostService.get_post, UserService.get_user, CommentService.get_comment (single-entity reads — highest hit rate, easiest invalidation). TTL 5 min.
+Phase 2: Add list caching for posts(...) with version-tag invalidation. TTL 60 s.
+Phase 3: Stampede locks + stale-while-revalidate + metrics dashboard.
+Phase 4 (only if measured): Comment list caching, first-page connection caching.
