@@ -3,9 +3,31 @@ from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.middleware.gzip import GZipMiddleware
 from fastapi.middleware.trustedhost import TrustedHostMiddleware
+from starlette.middleware.base import BaseHTTPMiddleware
+from starlette.responses import JSONResponse
 from app.core.config import settings
 from app.graphql.apq.middleware import GraphQLAPQMiddleware
 from app.graphql.router import graphql_router
+
+
+class MaxBodySizeMiddleware(BaseHTTPMiddleware):
+    """Reject requests whose body exceeds settings.MAX_REQUEST_BYTES.
+
+    First-line DoS shield — kills oversized payloads before JSON parse or
+    GraphQL lex/validate. Only enforced when Content-Length is present.
+    """
+
+    async def dispatch(self, request, call_next):
+        cl = request.headers.get("content-length")
+        if cl is not None:
+            try:
+                if int(cl) > settings.MAX_REQUEST_BYTES:
+                    return JSONResponse(
+                        {"detail": "Request body too large"}, status_code=413
+                    )
+            except ValueError:
+                pass
+        return await call_next(request)
 
 
 @asynccontextmanager
@@ -36,6 +58,7 @@ app.add_middleware(
     allow_headers=["*"],
 )
 app.add_middleware(TrustedHostMiddleware, allowed_hosts=settings.ALLOWED_HOSTS)
+app.add_middleware(MaxBodySizeMiddleware)
 
 app.include_router(graphql_router, prefix="/graphql")
 

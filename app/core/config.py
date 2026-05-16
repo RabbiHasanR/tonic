@@ -28,6 +28,13 @@ class Settings(BaseSettings):
     # Redis — APQ hash store
     REDIS_URL: str = "redis://redis:6379/0"
 
+    # GraphQL query-shape limits (defense-in-depth against DoS)
+    MAX_QUERY_DEPTH: int = 10
+    MAX_QUERY_ALIASES: int = 15
+    MAX_QUERY_TOKENS: int = 1500
+    MAX_PAGE_SIZE: int = 50
+    MAX_REQUEST_BYTES: int = 100_000
+
     @computed_field
     @property
     def DATABASE_URL(self) -> str:

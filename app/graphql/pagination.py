@@ -9,6 +9,8 @@ from sqlalchemy import tuple_
 from sqlmodel import Session
 from strawberry.exceptions import GraphQLError
 
+from app.core.config import settings
+
 Direction = Literal["asc", "desc"]
 
 
@@ -37,11 +39,14 @@ def offset_paginate(
     page: int,
     page_size: int,
     default_page_size: int = 20,
-    max_page_size: int = 100,
+    max_page_size: int | None = None,
 ) -> tuple[list, PageMeta]:
     """Offset/page-based pagination. `base_stmt` must already be ordered."""
+    cap = max_page_size if max_page_size is not None else settings.MAX_PAGE_SIZE
+    if page_size and page_size > cap:
+        raise GraphQLError(f"page size too large, max {cap}")
     page = max(1, page)
-    page_size = max(1, min(page_size or default_page_size, max_page_size))
+    page_size = max(1, page_size or default_page_size)
     total_items = int(session.exec(count_stmt).one())
     total_pages = (total_items + page_size - 1) // page_size if total_items else 0
     rows = list(
@@ -83,7 +88,7 @@ def paginate(
     before: str | None,
     direction: Direction = "desc",
     default_limit: int = 20,
-    max_limit: int = 100,
+    max_limit: int | None = None,
     with_count: bool = True,
 ) -> tuple[list, bool, bool, int]:
     """Relay cursor pagination over a (sort_col, id_col) composite key.
@@ -101,11 +106,17 @@ def paginate(
     if first is not None and before is not None:
         raise GraphQLError("`before` can only be combined with `last`")
 
+    cap = max_limit if max_limit is not None else settings.MAX_PAGE_SIZE
+    if first is not None and first > cap:
+        raise GraphQLError(f"`first` too large, max {cap}")
+    if last is not None and last > cap:
+        raise GraphQLError(f"`last` too large, max {cap}")
+
     backward = last is not None or before is not None
     composite = tuple_(sort_col, id_col)
 
     if not backward:
-        limit = max(1, min(first if first is not None else default_limit, max_limit))
+        limit = max(1, first if first is not None else default_limit)
         if direction == "desc":
             stmt = base_stmt.order_by(sort_col.desc(), id_col.desc())
             if after is not None:
@@ -121,7 +132,7 @@ def paginate(
         nodes = rows[:limit] if has_next_page else rows
         has_previous_page = after is not None
     else:
-        limit = max(1, min(last if last is not None else default_limit, max_limit))
+        limit = max(1, last if last is not None else default_limit)
         if direction == "desc":
             stmt = base_stmt.order_by(sort_col.asc(), id_col.asc())
             if before is not None:

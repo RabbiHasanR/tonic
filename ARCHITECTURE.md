@@ -78,7 +78,7 @@ docker-compose.yml          # postgres + app (dev hot-reload)
            │
            ▼
 ┌─────────────────────┐
-│ Middleware stack    │  TrustedHost → CORS → GZip → GraphQLAPQ
+│ Middleware stack    │  MaxBodySize → TrustedHost → CORS → GZip → GraphQLAPQ
 └──────────┬──────────┘
            │
            ▼
@@ -123,8 +123,10 @@ docker-compose.yml          # postgres + app (dev hot-reload)
 1. Client sends a GraphQL request to `/graphql` — POST with a JSON body for
    mutations and most queries, or GET with `query`/`variables`/`extensions`
    query params for public reads using APQ.
-2. Middleware stack runs **outer → inner**: TrustedHost → CORS → GZip →
-   GraphQLAPQ. The APQ layer resolves any `persistedQuery` hash via Redis
+2. Middleware stack runs **outer → inner**: MaxBodySize → TrustedHost →
+   CORS → GZip → GraphQLAPQ. `MaxBodySize` rejects oversized POSTs (>
+   `settings.MAX_REQUEST_BYTES`) with `413` before any parsing happens.
+   The APQ layer resolves any `persistedQuery` hash via Redis
    (returning `PersistedQueryNotFound` on miss), then on the response side
    injects a `Cache-Control` header derived from the resolved query's root
    field (`public, max-age=…` for `post`/`user`/`posts` first page;

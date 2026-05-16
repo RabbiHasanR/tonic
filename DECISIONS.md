@@ -31,6 +31,29 @@ Each entry explains *why* a choice was made — and why alternatives were not.
 
 ---
 
+## 2026-05-16 — Query-shape limits (depth, aliases, tokens, page size, body size)
+
+**Context:** GraphQL exposes cyclic types (`Post.author → User.posts → [Post].comments → [Comment].author → …`) and id-keyed root fields (`post(id)`, `user(id)`) on a public endpoint. Without shape limits a single HTTP request can fan out into thousands of DB lookups via deep nesting, alias bombing, or oversized documents — classic GraphQL DoS vectors. Batch requests are not enabled (Strawberry's default), so that vector is already closed.
+**Decision:** Layered defense-in-depth, each cheaper than the next, all driven by `settings`:
+
+1. **HTTP body cap** — `MaxBodySizeMiddleware` rejects POSTs with `Content-Length > MAX_REQUEST_BYTES` (default 100 KB) with `413`.
+2. **Token cap** — `MaxTokensLimiter(MAX_QUERY_TOKENS=1500)` Strawberry extension, kills oversized documents at lex.
+3. **Depth cap** — `QueryDepthLimiter(MAX_QUERY_DEPTH=10)` extension, kills deep recursion through cyclic types.
+4. **Alias cap** — `MaxAliasesLimiter(MAX_QUERY_ALIASES=15)` extension, kills alias-bomb id lookups.
+5. **Page-size cap** — `MAX_PAGE_SIZE=50` enforced in `paginate()` and `offset_paginate()`; raises `GraphQLError` on `first`/`last`/`pageSize` over the cap.
+6. **Introspection disabled in production** — `AddValidationRules([NoSchemaIntrospectionCustomRule])` is appended only when `settings.ENVIRONMENT == "production"`. GraphiQL still works in dev/local.
+
+**Alternatives considered:** Per-field cost/complexity scoring (e.g. graphql-cost-analysis), no limits + rely on rate limiting only, hard-coded constants, disabling introspection unconditionally.
+**Why this:** Each layer fails fast at the earliest possible stage (HTTP > lex > validate > execute), so bad requests cost the server almost nothing. Strawberry's built-in extensions are zero-maintenance vs hand-rolled cost scoring. Settings-driven means thresholds can be tuned in production without code changes.
+**Why not query complexity / cost analysis:** Requires per-field cost annotations and ongoing maintenance as the schema grows. Depth + aliases + pagination cap covers ~95% of realistic abuse with no per-field bookkeeping. Keep cost analysis as a future option if a specific field proves expensive.
+**Why not "rate limiting is enough":** A single in-budget request can still DoS the server if shape is unbounded. Shape limits and rate limits are complementary, not substitutes.
+**Why not hard-coded constants:** Production may need to relax depth for a specific client; env-driven settings let ops tune without redeploy.
+**Why introspection only in production:** Dev needs GraphiQL; production gains marginal security from blocking schema fingerprinting before crafted attacks.
+**Why 100 KB body cap, not 5 MB:** A realistic GraphQL query document is rarely >20 KB. 100 KB is a comfortable ceiling that still kills 5 MB junk before it reaches the parser.
+**Trade-offs accepted:** Error messages leak the limit value (e.g. `"page size too large, max 50"`) — knowing the limit doesn't help an attacker meaningfully and helps legit clients debug. No tests or metrics in this pass — limits are simple and exercised on every request. Rate limiting (per-IP / per-user) is a separate concern, not addressed here.
+
+---
+
 ## 2026-05-16 — Cache-aside on single-entity reads (Phase 1)
 
 **Context:** Resolver layer for `users`, `posts`, `comments` re-reads the same hot entities (a popular post, the author of every post in a feed) on every request. APQ caches query *documents* and DataLoaders batch within a request, but there is no cross-request data cache yet.
