@@ -31,6 +31,52 @@ Each entry explains *why* a choice was made — and why alternatives were not.
 
 ---
 
+## 2026-05-17 — Rate limiting via Redis-backed token bucket with query-complexity cost
+
+**Context:** Query-shape limits (2026-05-16 entry below) reject malicious *individual* requests but say nothing about *throughput*. A client sending many small, valid queries (within depth/alias/page caps) can still overwhelm Postgres. Counting requests per minute is a poor proxy for actual load: a `{ ping }` and a `posts(first: 50) { comments(first: 50) { author { posts(first: 50) { ... } } } }` are both "one request" but cost wildly different things.
+**Decision:** Per-client **token bucket** in Redis, where each request consumes `cost` tokens equal to its statically computed **query complexity score**.
+- **Bucket params:** capacity `RATE_LIMIT_CAPACITY=1000`, refill `RATE_LIMIT_REFILL_PER_SECOND=50`. Allows bursts up to 1000 cost-units, sustained ~50/sec.
+- **Hard cap:** `MAX_QUERY_COMPLEXITY=1000` rejects any *single* query exceeding the bucket capacity, regardless of bucket state (first request from a fresh client still can't run a 10k-cost query).
+- **Cost model:** AST walk with graphql-core `TypeInfo`. List fields multiply child cost by `first`/`last`/`limit`/`pageSize` arg value (or `settings.MAX_PAGE_SIZE` if absent). Scalars cost 1. Mutation fields are flat `MUTATION_FLAT_COST=10`.
+- **Client key:** `rl:u:{user_id}` for authed users, `rl:ip:{client_host}` for anonymous. Same bucket params for both for now.
+- **Atomicity:** Lua script in Redis — `EVALSHA` runs read-refill-check-write as one atomic op. Falls back to `EVAL` on `NoScriptError` (Redis restart).
+- **Fail-open:** any `RedisError` returns `(allowed=True)`. Availability beats strictness during a Redis outage — same policy as the entity cache.
+- **Enforcement point:** Strawberry `RateLimitExtension` in `on_validate`, after parse + validate. Lets cheap structural rejections (depth/alias/token) happen first; complexity walk only runs on valid documents.
+
+**Alternatives considered:**
+- **Fixed window** — count requests per N-sec window in Redis.
+- **Sliding window log** — sorted-set of timestamps per client.
+- **Sliding window counter** — two adjacent windows, weighted average.
+- **Leaky bucket as queue** — queue + fixed drain rate.
+- **Request-count limiting (no complexity scoring)** — `INCR` per request, ignore query shape.
+- **`WATCH`/`MULTI`/`EXEC` for atomicity** instead of Lua.
+- **Per-process Python `threading.Lock`** instead of Redis.
+
+**Why this:**
+- Token bucket maps naturally onto variable per-request cost (consume `N` tokens, not just `+1`) and tolerates legitimate bursts (page-load fan-out) while enforcing a sustained-rate ceiling.
+- Complexity scoring is the only way to make rate limiting meaningful for GraphQL — request count alone treats `{ ping }` and a fan-out bomb as equal.
+- Lua is the standard atomic primitive in Redis and runs server-side in one round trip, no retry loop.
+- `TypeInfo`-based AST walk gives accurate "is this a list" detection without hardcoding field names.
+- Fail-open matches the existing cache contract and keeps the API up when Redis is down.
+
+**Why not others:**
+- **Fixed window** has a boundary-burst exploit (full budget at `:59`, again at `:00` → 2× the intended cap in 1 sec).
+- **Sliding window log** is memory-heavy (one entry per request) and not worth the accuracy gain.
+- **Sliding window counter** doesn't model burst credit and is awkward to combine with variable cost.
+- **Leaky bucket as queue** queues requests instead of rejecting — we want immediate accept/reject for an HTTP API.
+- **Request-count limiting** ignores actual load; one expensive query can DoS the DB while staying "under the limit."
+- **`WATCH`/`MULTI`/`EXEC`** retries under contention and burns round trips; uglier and slower than Lua for the same correctness guarantee.
+- **In-process lock** doesn't span uvicorn workers or containers — the limit would become per-worker, not per-client.
+
+**Trade-offs accepted:**
+- **Static cost estimate is approximate.** It assumes worst-case fan-out (`MAX_PAGE_SIZE` when no limit arg is provided) and doesn't know about resolver cost beyond list multiplication. We overestimate cheap queries slightly; better than underestimating expensive ones.
+- **One bucket scheme for authed + anonymous.** A logged-in user gets the same allowance as a random IP. Per-role buckets (e.g. higher capacity for authed) deferred to a later phase.
+- **No `X-Forwarded-For` parsing yet.** Behind a reverse proxy everyone shares the proxy's IP → single shared bucket → false positives. Project doesn't currently sit behind a proxy; add `TRUST_PROXY` toggle when it does.
+- **Bucket state lives only in Redis.** If Redis flushes, all clients start with a full bucket — short-lived gap, considered acceptable.
+- **Cost computed but not exposed.** No `X-RateLimit-Remaining` headers yet. Could be added later via response middleware reading bucket state.
+
+---
+
 ## 2026-05-16 — Query-shape limits (depth, aliases, tokens, page size, body size)
 
 **Context:** GraphQL exposes cyclic types (`Post.author → User.posts → [Post].comments → [Comment].author → …`) and id-keyed root fields (`post(id)`, `user(id)`) on a public endpoint. Without shape limits a single HTTP request can fan out into thousands of DB lookups via deep nesting, alias bombing, or oversized documents — classic GraphQL DoS vectors. Batch requests are not enabled (Strawberry's default), so that vector is already closed.

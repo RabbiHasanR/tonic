@@ -92,6 +92,12 @@ docker-compose.yml          # postgres + app (dev hot-reload)
 └──────────┬──────────┘
            │
            ▼
+┌─────────────────────┐
+│ Extensions          │  Depth/Alias/Token limiters → RateLimit (cost-based)
+│ (on_validate)       │  Redis token bucket, atomic Lua check-and-charge
+└──────────┬──────────┘
+           │
+           ▼
 ┌─────────────────────┐       ┌─────────────────────┐
 │ Module resolver     │ ────▶ │ Module service      │
 │ (queries.py /       │       │ (static methods)    │
@@ -132,7 +138,14 @@ docker-compose.yml          # postgres + app (dev hot-reload)
    field (`public, max-age=…` for `post`/`user`/`posts` first page;
    `no-store` for everything else and any response carrying `errors`).
 3. `GraphQLRouter` parses the request and runs `get_context(...)`, which depends on `get_session()` to produce a fresh `Session`.
-4. Strawberry resolves the operation: each `@strawberry.field` / `@strawberry.mutation` runs its resolver with `info.context.session` available.
+4. Strawberry runs schema extensions in `on_validate`: structural validators
+   (depth / alias / token) run first, then `RateLimitExtension` computes a
+   complexity score over the parsed AST and atomically charges it to the
+   client's Redis token bucket (`rl:u:{user_id}` for authed, `rl:ip:{host}`
+   for anon). Over-cap or empty-bucket requests raise `GraphQLError` and
+   never reach a resolver. Strawberry resolves the operation: each
+   `@strawberry.field` / `@strawberry.mutation` runs its resolver with
+   `info.context.session` available.
 5. The resolver calls a service method (`{Name}Service.{action}(session, ...)`).
 6. The service does DB work via SQLModel (`session.add`, `session.exec(select(...))`, `session.get`) and returns ORM objects (or raises `Exception` on error — Strawberry surfaces it as a GraphQL `errors[]` entry).
 7. The resolver maps ORM objects to Strawberry types (`Item.from_model(...)`) and returns them.
@@ -223,6 +236,11 @@ All config flows through `app.core.config.settings` (pydantic-settings `BaseSett
     populated by `{Post,User,Comment}Service.get_*` and invalidated by the
     corresponding `create_*`/`update_*`/`delete_*` mutations. TTL 300s for
     posts/comments, 600s for users.
+  - `rl:u:{user_id}` / `rl:ip:{client_host}` → token-bucket state
+    (`{tokens, ts}` hash) for rate limiting. Atomically refilled and
+    decremented by a Lua script (`app/graphql/rate_limit.py`) on every
+    GraphQL operation, charged by the computed query complexity. TTL =
+    `ceil(capacity / refill) + 60s` so idle keys self-clean.
 - **Failure mode:** Cache calls fail open — `RedisError` is logged and the
   service falls through to Postgres. Redis being down must never break the API.
 - **Why it's here:** Multiple uvicorn workers share one store; survives app

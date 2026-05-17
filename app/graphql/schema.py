@@ -9,6 +9,7 @@ from strawberry.extensions import (
 from strawberry.tools import merge_types
 
 from app.core.config import settings
+from app.graphql.rate_limit_ext import RateLimitExtension
 from app.modules.comments.mutations import CommentsMutation
 from app.modules.posts.mutations import PostsMutation
 from app.modules.posts.queries import PostsQuery
@@ -30,6 +31,7 @@ extensions = [
     QueryDepthLimiter(max_depth=settings.MAX_QUERY_DEPTH),
     MaxAliasesLimiter(max_alias_count=settings.MAX_QUERY_ALIASES),
     MaxTokensLimiter(max_token_count=settings.MAX_QUERY_TOKENS),
+    RateLimitExtension,
 ]
 if settings.ENVIRONMENT == "production":
     extensions.append(AddValidationRules([NoSchemaIntrospectionCustomRule]))

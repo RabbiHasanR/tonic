@@ -35,6 +35,13 @@ class Settings(BaseSettings):
     MAX_PAGE_SIZE: int = 50
     MAX_REQUEST_BYTES: int = 100_000
 
+    # Rate limiting (token bucket, cost = query complexity score)
+    RATE_LIMIT_ENABLED: bool = True
+    RATE_LIMIT_CAPACITY: int = 1000           # bucket size C (max burst)
+    RATE_LIMIT_REFILL_PER_SECOND: float = 50.0  # refill rate R (sustained cost/sec)
+    MAX_QUERY_COMPLEXITY: int = 1000          # per-request hard cap
+    MUTATION_FLAT_COST: int = 10              # cost per mutation field
+
     @computed_field
     @property
     def DATABASE_URL(self) -> str:
