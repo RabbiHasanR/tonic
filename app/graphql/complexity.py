@@ -66,6 +66,23 @@ def _walk_selection_set(
     type_info: TypeInfo,
     fragments: dict[str, FragmentDefinitionNode],
     variables: dict,
+    in_sized: bool = False,
+) -> int:
+    type_info.enter(selection_set)
+    try:
+        return _walk_selections(
+            selection_set, type_info, fragments, variables, in_sized
+        )
+    finally:
+        type_info.leave(selection_set)
+
+
+def _walk_selections(
+    selection_set: SelectionSetNode,
+    type_info: TypeInfo,
+    fragments: dict[str, FragmentDefinitionNode],
+    variables: dict,
+    in_sized: bool,
 ) -> int:
     total = 0
     for sel in selection_set.selections:
@@ -74,15 +91,23 @@ def _walk_selection_set(
             try:
                 field_type = type_info.get_type()
                 explicit_size = _resolve_size_arg(sel, variables)
-                # A field is "sized" if it has a recognized pagination arg
-                # (covers Relay connections whose return type is not a list)
-                # OR its return type is a GraphQLList.
-                is_sized = explicit_size is not None or _is_list_type(field_type)
+                # A field is "sized" if it has a recognized pagination arg,
+                # OR its return type is a GraphQLList AND we're not already
+                # inside a sized scope (avoids double-counting Relay
+                # connection.edges which represents the same N items the
+                # parent already multiplied for).
+                is_sized = explicit_size is not None or (
+                    not in_sized and _is_list_type(field_type)
+                )
                 if is_sized:
                     size = explicit_size or settings.MAX_PAGE_SIZE
                     child = (
                         _walk_selection_set(
-                            sel.selection_set, type_info, fragments, variables
+                            sel.selection_set,
+                            type_info,
+                            fragments,
+                            variables,
+                            in_sized=True,
                         )
                         if sel.selection_set
                         else 1
@@ -91,7 +116,11 @@ def _walk_selection_set(
                 else:
                     if sel.selection_set:
                         total += 1 + _walk_selection_set(
-                            sel.selection_set, type_info, fragments, variables
+                            sel.selection_set,
+                            type_info,
+                            fragments,
+                            variables,
+                            in_sized,
                         )
                     else:
                         total += 1
@@ -102,7 +131,7 @@ def _walk_selection_set(
             try:
                 if sel.selection_set:
                     total += _walk_selection_set(
-                        sel.selection_set, type_info, fragments, variables
+                        sel.selection_set, type_info, fragments, variables, in_sized
                     )
             finally:
                 type_info.leave(sel)
@@ -113,7 +142,7 @@ def _walk_selection_set(
             type_info.enter(frag)
             try:
                 total += _walk_selection_set(
-                    frag.selection_set, type_info, fragments, variables
+                    frag.selection_set, type_info, fragments, variables, in_sized
                 )
             finally:
                 type_info.leave(frag)
