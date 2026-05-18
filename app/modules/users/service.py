@@ -8,6 +8,7 @@ from strawberry.exceptions import GraphQLError
 from app.core.cache import cache_delete, cache_get, cache_set
 from app.core.security import hash_password, verify_password
 from app.graphql.pagination import PageMeta, offset_paginate
+from app.utils.validation import is_valid_email
 
 from .models import User
 
@@ -44,7 +45,7 @@ class UserService:
     @staticmethod
     def register(session: Session, email: str, password: str, display_name: str) -> User:
         email = email.strip().lower()
-        if not email or "@" not in email:
+        if not is_valid_email(email):
             raise GraphQLError("Invalid email")
         if len(password) < 8:
             raise GraphQLError("Password must be at least 8 characters")
@@ -71,6 +72,8 @@ class UserService:
     @staticmethod
     def authenticate(session: Session, email: str, password: str) -> User:
         email = email.strip().lower()
+        if not is_valid_email(email):
+            raise GraphQLError("Invalid email or password")
         user = session.exec(select(User).where(User.email == email)).first()
         if user is None or not verify_password(password, user.password_hash):
             raise GraphQLError("Invalid email or password")

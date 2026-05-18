@@ -2,13 +2,13 @@ from datetime import datetime
 from uuid import UUID
 
 from sqlalchemy import func
+from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import aliased
 from sqlmodel import Session, select
 from strawberry.exceptions import GraphQLError
 
 from app.core.cache import cache_delete, cache_get, cache_set
 from app.graphql.pagination import encode_cursor, paginate
-from app.modules.posts.service import PostService
 
 from .models import Comment
 
@@ -171,11 +171,20 @@ class CommentService:
     ) -> Comment:
         if not body.strip():
             raise GraphQLError("Comment body is required")
-        # Validate post exists (raises GraphQLError if not)
-        post = PostService.get_post(session, post_id)
-        comment = Comment(post_id=post.id, author_id=author_id, body=body.strip())
+        try:
+            pid = UUID(post_id)
+        except ValueError as exc:
+            raise GraphQLError("Post not found") from exc
+        comment = Comment(post_id=pid, author_id=author_id, body=body.strip())
         session.add(comment)
-        session.commit()
+        try:
+            session.commit()
+        except IntegrityError as exc:
+            # Why: comments has two FKs (post_id, author_id). author_id was just
+            # loaded this request by require_user, so the only realistic FK
+            # failure here is post_id pointing at a missing/deleted post.
+            session.rollback()
+            raise GraphQLError("Post not found") from exc
         session.refresh(comment)
         cache_set(
             _comment_cache_key(str(comment.id)),
