@@ -6,6 +6,8 @@ from fastapi.middleware.trustedhost import TrustedHostMiddleware
 from starlette.middleware.base import BaseHTTPMiddleware
 from starlette.responses import JSONResponse
 from app.core.config import settings
+from app.core.database import engine
+from app.core.observability import init_observability
 from app.graphql.apq.middleware import GraphQLAPQMiddleware
 from app.graphql.router import graphql_router
 
@@ -42,6 +44,11 @@ app = FastAPI(
     docs_url=None,   # No REST endpoints — GraphiQL playground at /graphql instead
     redoc_url=None,
 )
+
+# OTel auto-instrumentation must run after `app` exists but before middleware
+# is added — FastAPIInstrumentor inserts its own ASGI middleware and we want it
+# at the outermost layer so spans cover gzip/CORS/body-size work too.
+init_observability(app, engine)
 
 # Middleware order: outermost runs first. Registration is reverse: last add = outermost.
 # APQ middleware sits inside GZip so it sees uncompressed bodies; outside the

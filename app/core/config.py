@@ -42,6 +42,13 @@ class Settings(BaseSettings):
     MAX_QUERY_COMPLEXITY: int = 1000          # per-request hard cap
     MUTATION_FLAT_COST: int = 10              # cost per mutation field
 
+    # OpenTelemetry — traces only in Phase 1 (metrics/logs come later)
+    OTEL_ENABLED: bool = False
+    OTEL_SERVICE_NAME: str = "tonic-api"
+    OTEL_SERVICE_VERSION: str = "0.1.0"
+    OTEL_EXPORTER_OTLP_ENDPOINT: str = "http://otel-collector:4317"
+    OTEL_TRACES_SAMPLER_ARG: float = 1.0      # 1.0 = sample everything (local dev)
+
     @computed_field
     @property
     def DATABASE_URL(self) -> str:
