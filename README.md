@@ -6,7 +6,8 @@ not just a basic CRUD app.
 
 What's inside: full CRUD, DataLoader to fix N+1, Redis caching, persisted
 queries (APQ), cursor pagination, query depth/complexity limits, rate
-limiting with a leaky bucket, and JWT auth.
+limiting with a leaky bucket, JWT auth, and end-to-end distributed
+tracing with OpenTelemetry + Jaeger.
 
 ![Python](https://img.shields.io/badge/python-3.13-blue)
 ![FastAPI](https://img.shields.io/badge/FastAPI-async-009688)
@@ -54,11 +55,29 @@ limiting with a leaky bucket, and JWT auth.
 - Input validation (email format, foreign-key existence checks)
 - Max body size check before parsing; TrustedHost + CORS configured
 
+### Observability
+
+- **OpenTelemetry tracing** — every request emits a span tree covering
+  HTTP → GraphQL operation → resolvers → SQL queries → Redis ops, so you
+  can see *exactly* where a slow request spent its time
+  → [app/core/observability.py](app/core/observability.py)
+- **Auto-instrumentation** for FastAPI, SQLAlchemy, Redis, and the stdlib
+  logger (trace IDs auto-injected into log records)
+- **PII scrubbing** — Strawberry's tracing extension recursively redacts
+  `password` / `token` / `secret` fields inside GraphQL inputs before they
+  reach span attributes; passwords never leak into traces
+- **Local stack**: OTel Collector → Jaeger UI bundled in `docker-compose`.
+  Open <http://localhost:16686>, pick service `tonic-api`, see every trace.
+- Vendor-neutral OTLP wire protocol — swap Jaeger for Tempo, Honeycomb,
+  Grafana Cloud, Datadog, etc. by pointing `OTEL_EXPORTER_OTLP_ENDPOINT`
+  at a different collector
+- No-op when `OTEL_ENABLED=false` — zero cost if you don't want it
+
 ### Operations
 
 - Multistage Docker build (small final image, non-root user)
-- `docker-compose` runs Postgres + Redis + app together
-- Health check at `/health`
+- `docker-compose` runs Postgres + Redis + app + OTel Collector + Jaeger together
+- Health check at `/health` (excluded from tracing to keep span volume low)
 - Stateless app — easy to scale; all shared state in Postgres/Redis
 - Cache failures don't crash the API — they just fall back to the DB
 
@@ -73,9 +92,11 @@ Every request gets a fresh DB session on `info.context`.
 ```text
 Client → Middleware (BodySize → CORS → GZip → APQ)
        → GraphQL Router → Schema
-       → Extensions (Depth/Alias/Token limits → Complexity rate limit)
+       → Extensions (Depth/Alias/Token limits → Complexity rate limit → OTel)
        → Resolver → Service → SQLModel → Postgres
                               └→ Redis (cache + APQ + rate buckets)
+
+   (every layer emits OTLP spans →  OTel Collector  →  Jaeger UI)
 ```
 
 Full version: [ARCHITECTURE.md](ARCHITECTURE.md).
@@ -112,6 +133,7 @@ Migrations live in [alembic/versions/](alembic/versions/).
 | Cache / APQ / rate limit | Redis 7 |
 | ORM / Migration | SQLModel + Alembic |
 | Auth | PyJWT + argon2-cffi |
+| Tracing | OpenTelemetry SDK + OTLP/gRPC → Collector → Jaeger |
 | Container | Multistage Docker + docker-compose |
 
 See [DECISIONS.md](DECISIONS.md) for *why* each piece was chosen.
@@ -128,6 +150,7 @@ docker compose exec app alembic upgrade head   # after first model is added
 
 - GraphiQL playground: <http://localhost:8000/graphql>
 - Health check: <http://localhost:8000/health>
+- Jaeger tracing UI: <http://localhost:16686> (service: `tonic-api`)
 
 The app service mounts `./app` and `./alembic` so code edits hot-reload via uvicorn.
 Postgres data persists in the named volume `postgres_data`.
@@ -149,12 +172,13 @@ uvicorn app.main:app --reload --host 0.0.0.0 --port 8000
 
 ```text
 app/
-├── core/       # config, database, auth, security, cache
+├── core/       # config, database, auth, security, cache, observability
 ├── graphql/    # schema, context, router, loaders, pagination,
 │               # complexity, rate_limit, apq/
 ├── modules/    # users/, posts/, comments/
 └── main.py     # FastAPI app: middleware, /graphql, /health
 alembic/        # migrations
+docker/         # otel-collector-config.yaml
 tests/          # pytest suite
 ```
 
