@@ -1,5 +1,3 @@
-"""Lightweight input validators shared across modules."""
-
 import re
 
 _EMAIL_RE = re.compile(r"^[^\s@]+@[^\s@]+\.[^\s@]+$")
